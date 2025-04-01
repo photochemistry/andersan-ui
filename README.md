@@ -1,4 +1,84 @@
-# This repo is no longer maintained. Consider using `npm init vite` and selecting the `svelte` option or — if you want a full-fledged app framework — use [SvelteKit](https://kit.svelte.dev), the official application framework for Svelte.
+# Svelte + Vite アプリケーション
+
+このプロジェクトは[Svelte](https://svelte.dev)と[Vite](https://vitejs.dev)を使用したWebアプリケーションです。
+
+## 必要条件
+
+- [Node.js](https://nodejs.org) (バージョン16以上)
+- npm (Node.jsに同梱)
+
+## 開始方法
+
+### 依存関係のインストール
+
+```bash
+npm install
+```
+
+### 開発サーバーの起動
+
+```bash
+npm run dev
+```
+
+[localhost:8080](http://localhost:8080)にアクセスすると、アプリケーションが表示されます。
+`src`ディレクトリ内のコンポーネントファイルを編集すると、自動的に変更が反映されます。
+
+### 開発環境の設定
+
+- [Visual Studio Code](https://code.visualstudio.com/)を使用している場合は、[Svelte for VS Code](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode)拡張機能のインストールを推奨します。
+- その他のエディタを使用している場合は、適切なSvelte用シンタックスハイライト拡張機能をインストールしてください。
+
+## ビルドと本番環境での実行
+
+本番用にアプリケーションをビルドするには：
+
+```bash
+npm run build
+```
+
+ビルドされたアプリケーションをプレビューするには：
+
+```bash
+npm run preview
+```
+
+## プロジェクト構成
+
+- `src/` - アプリケーションのソースコード
+  - `components/` - 再利用可能なコンポーネント
+  - `App.svelte` - アプリケーションのルートコンポーネント
+- `public/` - 静的アセット（画像、フォントなど）
+- `vite.config.js` - Viteの設定ファイル
+
+## デプロイ
+
+### Vercelへのデプロイ
+
+1. [Vercel](https://vercel.com)アカウントを作成
+2. Vercel CLIをインストール：
+```bash
+npm install -g vercel
+```
+3. プロジェクトをデプロイ：
+```bash
+vercel
+```
+
+### その他のプラットフォームへのデプロイ
+
+`npm run build`を実行して生成された`dist`ディレクトリを、お好みのホスティングプラットフォームにデプロイしてください。
+
+## 開発ツール
+
+- Vite - 高速な開発サーバーとビルドツール
+- Svelte - リアクティブなUIフレームワーク
+- chart.js - データ可視化ライブラリ
+- leaflet - インタラクティブな地図ライブラリ
+
+## ライセンス
+
+このプロジェクトはMITライセンスの下で公開されています。
 
 ---
 
