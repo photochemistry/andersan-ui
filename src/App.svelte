@@ -67,7 +67,8 @@
                             data: y1,
                             borderColor: 'rgb(75, 192, 192)',
                             tension: 0.1,
-                            fill: false,
+                            fill: true, // 塗りつぶしを有効にする
+                            backgroundColor: 'rgba(75, 192, 192, 0.5)', // 青色、透明度50%
                             yAxisID: 'y',
                         },
                         {
