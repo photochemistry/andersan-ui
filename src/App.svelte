@@ -35,6 +35,15 @@
         const hour = date.getHours().toString().padStart(2, '0');
         return `${month}月${day}日 ${hour}時時点`;
     }
+
+    function getGradientColor(probability) {
+        // 確率に応じて色を計算
+        const r = Math.round(255 * probability); // 赤成分
+        const g = Math.round(255 * (1 - probability));
+        const b = Math.round(255 * (1 - probability));
+        return `rgba(${r}, ${g}, ${b}, 0.5)`; // 透明度50%
+    }
+
     //グラフ描画関数を定義
     function drawChart(ox_array, p_array, now) {
         if (myChart) {
@@ -42,6 +51,16 @@
             myChart = null;
         }
         if (ox_array === undefined || p_array === undefined) return;
+
+        // p_array に NaN が含まれているかどうかをチェック
+        if (p_array.some(isNaN)) {
+            console.warn("p_array contains NaN. Skipping chart drawing.");
+            // 以前に描画されたグラフをクリア
+            const ctx = document.getElementById('myChart').getContext('2d');
+            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            return; // グラフ描画をスキップ
+        }
+
         let ticks = [];
         for (let hr = 1; hr <= 24; hr++) {
             ticks.push(hr);
@@ -57,6 +76,9 @@
 
         if (x.length > 0 && y1.length > 0 && y2.length > 0) {
             const ctx = document.getElementById('myChart').getContext('2d');
+            const gradientColors = y2.map(prob => getGradientColor(prob / 100)); // 確率を0-1に正規化
+            console.log(y1)
+            console.log(y2)
             myChart = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -67,8 +89,26 @@
                             data: y1,
                             borderColor: 'rgb(75, 192, 192)',
                             tension: 0.1,
-                            fill: true, // 塗りつぶしを有効にする
-                            backgroundColor: 'rgba(75, 192, 192, 0.5)', // 青色、透明度50%
+                            fill: {
+                                target: 'origin',
+                                above: ctx => {
+                                    const chart = ctx.chart;
+                                    const { ctx: context, chartArea } = chart;
+                                    const data = chart.data.datasets[0].data;
+                                    console.log("E")
+                                    const colors = chart.data.datasets[0].backgroundColor;
+                                    // データが複数ある場合、グラデーションを作成
+                                    const gradient = context.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+                                    console.log("F",gradient)
+                                    for (let i = 0; i < data.length; i++) {
+                                        gradient.addColorStop(i / (data.length - 1), colors[i]);
+                                    }
+                                    console.log("G",gradient)
+                                    return gradient;
+                                },
+                                // value:true,
+                            },
+                            backgroundColor: gradientColors,
                             yAxisID: 'y',
                         },
                         {
@@ -220,7 +260,12 @@
                 let ox = Math.floor(ox_array[hr - 1] / 5) * 5;
                 let b = `(${ox}, ${hr})`;
                 let a = "120";
-                p_array.push(Math.round(ptable[a][b] * 100));
+                let prob = ptable[a][b];
+                if (prob === undefined || isNaN(prob)) {
+                    p_array.push(NaN); // NaN の場合は NaN を代入する
+                } else {
+                    p_array.push(Math.round(prob * 100));
+                }
             }
             p_max = Math.max(...p_array);
         }
