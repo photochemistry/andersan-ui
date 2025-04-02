@@ -1,6 +1,5 @@
-
 // const API_URL="http://172.23.78.71:8087"
-const API_URL="http://192.168.3.234:8087"
+const API_URL="/api"
 
 export function dateToJSTString(date) {
 
