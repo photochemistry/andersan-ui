@@ -73,7 +73,7 @@
 
         let y1 = ox_array;
         let y2 = p_array;
-        const y120 = Array(y1.length).fill(120);
+        const y120 = [120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120,120];
 
         if (x.length > 0 && y1.length > 0 && y2.length > 0) {
             const ctx = document.getElementById('myChart').getContext('2d');
@@ -84,7 +84,7 @@
                     labels: x,
                     datasets: [
                         {
-                            label: 'OX Prediction (ppm)',
+                            label: 'OX Prediction (ppb)',
                             data: y1,
                             borderColor: 'rgb(75, 192, 192)',
                             tension: 0.1,
@@ -108,7 +108,7 @@
                         },
                         {
                             type: 'line',
-                            label: '',
+                            label: '注意報レベル',
                             data: y120,
                             borderColor: 'red',
                             borderWidth: 2,
@@ -138,7 +138,7 @@
                             beginAtZero: true,
                             title: {
                                 display: true,
-                                text: 'OX (ppm)',
+                                text: 'OX (ppb)',
                             },
                             min: 0, // 最小値を0に設定
                             max: 150, // 最大値を150に設定,
