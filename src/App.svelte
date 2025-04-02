@@ -73,12 +73,11 @@
 
         let y1 = ox_array;
         let y2 = p_array;
+        const y120 = Array(y1.length).fill(120);
 
         if (x.length > 0 && y1.length > 0 && y2.length > 0) {
             const ctx = document.getElementById('myChart').getContext('2d');
             const gradientColors = y2.map(prob => getGradientColor(prob / 100)); // 確率を0-1に正規化
-            console.log(y1)
-            console.log(y2)
             myChart = new Chart(ctx, {
                 type: 'line',
                 data: {
@@ -95,29 +94,28 @@
                                     const chart = ctx.chart;
                                     const { ctx: context, chartArea } = chart;
                                     const data = chart.data.datasets[0].data;
-                                    console.log("E")
                                     const colors = chart.data.datasets[0].backgroundColor;
                                     // データが複数ある場合、グラデーションを作成
                                     const gradient = context.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
-                                    console.log("F",gradient)
                                     for (let i = 0; i < data.length; i++) {
                                         gradient.addColorStop(i / (data.length - 1), colors[i]);
                                     }
-                                    console.log("G",gradient)
                                     return gradient;
                                 },
-                                // value:true,
                             },
                             backgroundColor: gradientColors,
                             yAxisID: 'y',
                         },
                         {
-                            label: 'Probability of exceeding 120ppm (%)',
-                            data: y2,
-                            borderColor: 'rgb(255, 99, 132)',
-                            tension: 0.1,
+                            type: 'line',
+                            label: '',
+                            data: y120,
+                            borderColor: 'red',
+                            borderWidth: 2,
+                            pointRadius: 0,
                             fill: false,
-                            yAxisID: 'y-right',
+                            xAxisID: 'x',
+                            yAxisID: 'y'
                         },
                     ],
                 },
@@ -130,6 +128,9 @@
                                 display: true,
                                 text: 'Hours',
                             },
+                            grid:{
+                                display:false
+                            }
                         },
                         y: {
                             type: 'linear',
@@ -140,35 +141,36 @@
                                 text: 'OX (ppm)',
                             },
                             min: 0, // 最小値を0に設定
-                            max: 150, // 最大値を150に設定
-                            ticks: {
-                                stepSize: 30 // 30刻みで表示
+                            max: 150, // 最大値を150に設定,
+                            grid:{
+                                display:true
+                            },
+                            border:{
+                                display:true
+                            },
+                            ticks:{
+                                stepSize:30
                             }
                         },
                         'y-right': {
-                            type: 'linear',
-                            position: 'right',
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: 'Probability (%)',
-                            },
-                            min: 0,
-                            max: 100,
-                            ticks: {
-                                stepSize: 20
-                            },
-                            grid: {
-                                drawOnChartArea: false,
-                            },
+                            display: false,
                         },
                     },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                filter: function(item, chart) {
+                                    return item.text !== 'Probability of exceeding 120ppm (%)';
+                                }
+                            }
+                        }
+                    }
                 },
                 plugins: [{
                     beforeDraw: (chart) => {
                         const ctx = chart.canvas.getContext('2d');
                         ctx.save();
-                        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0)'; // 背景を完全に透明にする
                         ctx.fillRect(0, 0, chart.width, chart.height);
                         ctx.restore();
                     },
