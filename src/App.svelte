@@ -98,6 +98,11 @@
                                 display: true,
                                 text: 'OX (ppm)',
                             },
+                            min: 0, // 最小値を0に設定
+                            max: 150, // 最大値を150に設定
+                            ticks: {
+                                stepSize: 30 // 30刻みで表示
+                            }
                         },
                         'y-right': {
                             type: 'linear',
