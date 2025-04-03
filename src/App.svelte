@@ -63,15 +63,17 @@
             return; // グラフ描画をスキップ
         }
 
-        let ticks = [];
-        for (let hr = 1; hr <= 24; hr++) {
-            ticks.push(hr);
+        let x = []; // Changed to only include every 1 hours
+        for (let hr = 1; hr <= 24; hr++) { // Increment by 1
+            x.push(hr);
         }
-        let x = ticks.map((hr) => {
+
+        let xLabels = []; // Changed to only include every 3 hours
+        for (let hr = 1; hr <= 24; hr += 3) { // Increment by 3
             const futureTime = new Date(now);
             futureTime.setHours(now.getHours() + hr);
-            return `${formatTime(futureTime)} (+${hr})`;
-        });
+            xLabels.push(`${formatTime(futureTime)} (+${hr})`);
+        }
 
         let y1 = ox_array;
         let y2 = p_array;
@@ -83,7 +85,7 @@
             myChart = new Chart(ctx, {
                 type: 'line',
                 data: {
-                    labels: x,
+                    labels: x, // Use x array as labels
                     datasets: [
                         {
                             label: 'OX Prediction (ppb)',
@@ -131,7 +133,20 @@
                                 text: 'Hours',
                             },
                             grid:{
-                                display:false
+                                display:false // Remove grid lines
+                            },
+                            ticks: {
+                                align: 'inner', // Move labels inside
+                                mirror: true, // Mirror the ticks inside
+                                callback: function(value, index, ticks) {
+                                    // Display label only if it's in xLabels
+                                    if ((index + 1) % 3 === 0 || index === 0) {
+                                        const futureTime = new Date(now);
+                                        futureTime.setHours(now.getHours() + index + 1);
+                                        return `${formatTime(futureTime)} (+${index + 1})`;
+                                    }
+                                    return null; // Hide label otherwise
+                                }
                             }
                         },
                         y: {
@@ -180,6 +195,7 @@
             });
         }
     }
+
 
     async function updateCenter() {
         updateFlag = false;
@@ -318,8 +334,10 @@
 
     #map {
         position: relative;
-        height: 100vh;
+        min-height: 100vh; /* Use min-height instead of height */
+        height: calc(100vh - env(safe-area-inset-bottom)); /* Use calc() for more accurate height */
         width: 100vw;
+        padding-bottom: env(safe-area-inset-bottom); /* Add padding for safe area */
     }
 
     .crosshair-container {
@@ -403,7 +421,7 @@
 
     .current-location-button {
         position: absolute;
-        bottom: 10px;
+        bottom: env(safe-area-inset-bottom); /* Adjust bottom position for safe area */
         right: 10px;
         background-color: #333;
         border: none;
@@ -425,4 +443,5 @@
     .current-location-button:hover {
         transform: scale(1.1);
     }
+
 </style>
