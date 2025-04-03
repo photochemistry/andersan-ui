@@ -5,9 +5,11 @@
     import { fetchData, fetchAddress, fetchPtable } from './retrieve.js';
     import Chart from 'chart.js/auto';
 
+    // ... (rest of your existing code)
+
     let map;
     let ox_dict;
-    let address = "";
+    let address = ""; // Initialize as an empty string
     let addr_dict = {};
     let ox_array;
     let p_array;
@@ -196,12 +198,19 @@
         const c = map.getCenter();
         const latitude = c.lat;
         const longitude = c.lng;
-         await fetchAddress(longitude, latitude).then(a => {
-                address = a.address;
-                addr_dict = a;
-         });
+        await fetchAddress(longitude, latitude).then(a => {
+            addr_dict = a;
+            // Parse the address string
+            const addressParts = a.address.split(',');
+            if (addressParts.length >= 4) {
+                const prefecture = addressParts[addressParts.length - 3].trim(); // Prefecture is the second-to-last part
+                const city = addressParts[addressParts.length - 4].trim(); // City is the third-to-last part
+                address = `${prefecture} ${city}`; // Format the address
+            } else {
+                address = a.address; // If not enough parts, use the original address
+            }
+        });
     }
-
     function debounceUpdateCenter() {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(updateCenter, 1000);
@@ -280,11 +289,11 @@
     <div class="crosshair-container">
         <img class="crosshair" src="/images/crosshair.svg" alt="Target" />
     </div>
-    <div class="address-overlay">{address}</div>
-    <div class="pmax-overlay">
-        <div class="pmax-label">本日中に注意報発令レベルに達する確率</div>
-        <div class="pmax-value">{p_max}%</div>
+    <div class="info-box">
+        <div class="address-overlay">{address}</div>
         <div class="start-time-overlay">{formatStartTime(now)}</div>
+        <div class="pmax-value">{p_max}%</div>
+        <div class="pmax-label">(光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)</div>
     </div>
     <div class="tile-info-overlay">{addr_dict.X} {addr_dict.Y}</div>
     <div class="chart-container">
@@ -325,25 +334,22 @@
         align-items: center; /* 垂直方向の中央揃え */
     }
 
-    .crosshair {
-        width: 32px; /* アイコンのサイズを調整 */
-        height: 32px;
-    }
-
-    .address-overlay {
+    .info-box {
         position: fixed;
         top: 10px;
-        left: 10px;
+        left: 50%;
+        transform: translateX(-50%);
         background-color: rgba(255, 255, 255, 0.7);
-        padding: 4px;
+        padding: 10px;
         border-radius: 4px;
         border: 1px solid black;
-        font-size: 12px;
+        text-align: center;
         z-index: 10000;
-        white-space: nowrap;
-        pointer-events: none; /* クリックイベントを邪魔しないようにする */
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
     }
-
     .chart-container {
         position: absolute;
         bottom: 0;
@@ -359,28 +365,23 @@
         z-index: 900;
     }
 
-    .pmax-overlay {
-        position: absolute;
-        top: 10%;
-        left: 50%;
-        transform: translateX(-50%);
-        text-align: center;
-        z-index: 1000;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
+    .address-overlay {
+        font-size: 16px;
+        white-space: nowrap;
+        margin-bottom: 5px;
     }
 
-    .pmax-label {
-        font-size: 12pt;
-        margin-bottom: 5px;
+    .start-time-overlay {
+        font-size: 10pt;
         color: black;
+        margin-bottom: 5px;
     }
 
     .pmax-value {
         font-size: 36pt;
         font-weight: bold;
         color: black;
+        margin-bottom:5px;
     }
 
     .tile-info-overlay {
@@ -395,8 +396,8 @@
         z-index: 1000;
     }
 
-    .start-time-overlay {
-        font-size: 12pt;
+    .pmax-label {
+        font-size: 9pt;
         color: black;
     }
 
