@@ -57,7 +57,7 @@ export async function fetchData(now) {
   
 //   fetchData()->then(result=>{console.log(result)}); // 関数を実行
 
-export async function fetchAddress(lon, lat){
+export async function fetchAddress(lon, lat) {
     try {
         const url = `${API_URL}/loc/${lon}/${lat}`;
         const response = await fetch(url); // APIエンドポイントを指定
