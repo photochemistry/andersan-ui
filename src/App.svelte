@@ -6,6 +6,7 @@
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
     import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor } from './utils.js';
+    import InfoModal from './components/InfoModal.svelte';
 
     let map;
     let ox_dict;
@@ -20,6 +21,7 @@
     let center = [35.331586, 139.349782];
     let debounceTimer;
     let updateFlag = false;
+    let isInfoModalOpen = false;
 
     function drawChart(ox_array, p_array, now) {
         if (myChart) {
@@ -90,10 +92,22 @@
             return;
         }
 
-        const latitude = 35 + 20 / 60 + 8 / 3600;
-        const longitude = 139 + 20 / 60 + 58 / 3600;
-        map.setView([latitude, longitude], 12);
-        updateCenter();
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const { latitude, longitude } = position.coords;
+                map.setView([latitude, longitude], 12);
+                updateCenter();
+            },
+            (error) => {
+                console.error('Error getting location:', error);
+                alert('位置情報の取得に失敗しました。ブラウザの設定を確認してください。');
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 0
+            }
+        );
     };
 
     afterUpdate(() => {
@@ -101,6 +115,10 @@
             myChart.resize();
         }
     });
+
+    function toggleInfoModal() {
+        isInfoModalOpen = !isInfoModalOpen;
+    }
 
     $: if (updateFlag) {
         now.setMinutes(0);
@@ -141,10 +159,19 @@
     <div class="chart-container">
         <canvas id="myChart" class="chart-overlay"></canvas>
     </div>
-    <button class="current-location-button" on:click={moveToCurrentLocation}>
-        <img src="/images/near_me.svg" alt="現在地に移動" />
-    </button>
+    <div class="info-button-container">
+        <button class="info-button" on:click={toggleInfoModal}>
+            <span class="info-icon">i</span>
+        </button>
+    </div>
+    <div class="location-button-container">
+        <button class="current-location-button" on:click={moveToCurrentLocation}>
+            <img src="/images/near_me.svg" alt="現在地に移動" />
+        </button>
+    </div>
 </div>
+
+<InfoModal isOpen={isInfoModalOpen} onClose={toggleInfoModal} />
 
 <style>
     /* Resetting default margins and paddings */
@@ -160,10 +187,10 @@
 
     #map {
         position: relative;
-        min-height: 100vh; /* Use min-height instead of height */
-        height: calc(100vh - env(safe-area-inset-bottom)); /* Use calc() for more accurate height */
+        min-height: 100vh;
+        height: calc(100vh - env(safe-area-inset-bottom));
         width: 100vw;
-        padding-bottom: env(safe-area-inset-bottom); /* Add padding for safe area */
+        padding-bottom: env(safe-area-inset-bottom);
     }
 
     .crosshair-container {
@@ -172,10 +199,10 @@
         left: 50%;
         transform: translate(-50%, -50%);
         z-index: 10000;
-        pointer-events: none; /* アイコンがクリックイベントを邪魔しないようにする */
-        display: flex; /* 画像を中央に配置するためのFlexbox */
-        justify-content: center; /* 水平方向の中央揃え */
-        align-items: center; /* 垂直方向の中央揃え */
+        pointer-events: none;
+        display: flex;
+        justify-content: center;
+        align-items: center;
     }
 
     .info-box {
@@ -194,6 +221,7 @@
         flex-direction: column;
         align-items: center;
     }
+
     .chart-container {
         position: absolute;
         bottom: 0;
@@ -230,8 +258,8 @@
 
     .tile-info-overlay {
         position: absolute;
-        top: 10px;
-        right: 10px;
+        bottom: 10px;
+        left: 10px;
         background-color: rgba(255, 255, 255, 0.5);
         padding: 4px;
         border-radius: 4px;
@@ -245,29 +273,72 @@
         color: black;
     }
 
-    .current-location-button {
+    .info-button-container {
         position: absolute;
-        bottom: env(safe-area-inset-bottom); /* Adjust bottom position for safe area */
-        right: 10px;
-        background-color: #333;
-        border: none;
-        border-radius: 50%;
-        padding: 6px;
-        cursor: pointer;
-        z-index: 10000;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        transition: transform 0.2s ease-in-out;
+        top: 20px;
+        left: 20px;
+        z-index: 1000;
+        width: 40px;
+        height: 40px;
     }
 
-    .current-location-button img {
-        width: 32px;
-        height: 32px;
+    .location-button-container {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        z-index: 1000;
+        width: 40px;
+        height: 40px;
+    }
+
+    .info-button {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background-color: white;
+        border: 2px solid #4a4a4a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        transition: all 0.2s ease;
+    }
+
+    .info-button:hover {
+        background-color: #f0f0f0;
+        transform: scale(1.05);
+    }
+
+    .info-icon {
+        font-family: Arial, sans-serif;
+        font-weight: bold;
+        font-size: 20px;
+        color: #4a4a4a;
+    }
+
+    .current-location-button {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background-color: white;
+        border: 2px solid #4a4a4a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        transition: all 0.2s ease;
+        padding: 0;
     }
 
     .current-location-button:hover {
-        transform: scale(1.1);
+        background-color: #f0f0f0;
+        transform: scale(1.05);
     }
 
+    .current-location-button img {
+        width: 24px;
+        height: 24px;
+    }
 </style>
