@@ -1,5 +1,5 @@
 <script>
-    import { onMount, afterUpdate } from 'svelte';
+    import { onMount, afterUpdate, onDestroy } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
     import { fetchData, fetchAddress, fetchPtable } from './retrieve.js';
@@ -15,13 +15,30 @@
     let ox_array;
     let p_array;
     let p_max = 0;
-    let now = new Date("2015-07-27 06:00+09:00");
+    let now;
     let ptable;
     let myChart;
     let center = [35.331586, 139.349782];
     let debounceTimer;
     let updateFlag = false;
     let isInfoModalOpen = false;
+    let isDemoMode = false;
+
+    function checkDemoMode() {
+        const url = new URL(window.location.href);
+        isDemoMode = url.searchParams.has('demo') || url.pathname.endsWith('/demo');
+    }
+
+    function updateNow() {
+        if (isDemoMode) {
+            now = new Date("2015-07-27 06:00+09:00");
+        } else {
+            now = new Date();
+            now.setMinutes(0);
+            now.setSeconds(0);
+            now.setMilliseconds(0);
+        }
+    }
 
     function drawChart(ox_array, p_array, now) {
         if (myChart) {
@@ -32,13 +49,17 @@
 
         if (p_array.some(isNaN)) {
             console.warn("p_array contains NaN. Skipping chart drawing.");
-            const ctx = document.getElementById('myChart').getContext('2d');
-            ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            const ctx = document.getElementById('myChart')?.getContext('2d');
+            if (ctx) {
+                ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            }
             return;
         }
 
-        const ctx = document.getElementById('myChart').getContext('2d');
-        myChart = new Chart(ctx, getChartConfig(ox_array, p_array, now, formatTime, getGradientColor));
+        const ctx = document.getElementById('myChart')?.getContext('2d');
+        if (ctx) {
+            myChart = new Chart(ctx, getChartConfig(ox_array, p_array, now, formatTime, getGradientColor));
+        }
     }
 
     async function updateCenter() {
@@ -74,6 +95,8 @@
     }
 
     onMount(() => {
+        checkDemoMode();
+        updateNow();
         map = L.map('map', { zoomControl: false }).setView([35.331586, 139.349782], 12);
 
         L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/blank/{z}/{x}/{y}.png', {
@@ -121,10 +144,7 @@
     }
 
     $: if (updateFlag) {
-        now.setMinutes(0);
-        now.setSeconds(0);
-        now.setMilliseconds(0);
-
+        updateNow();
         if (ox_dict !== undefined && addr_dict !== undefined) {
             const row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
             ox_array = Array.from({length: 24}, (_, i) => 
@@ -143,6 +163,18 @@
 
         drawChart(ox_array, p_array, now);
     }
+
+    onDestroy(() => {
+        if (map) {
+            map.remove();
+            map = null;
+        }
+        if (myChart) {
+            myChart.destroy();
+            myChart = null;
+        }
+        clearTimeout(debounceTimer);
+    });
 </script>
 
 <div id="map">
@@ -153,7 +185,13 @@
         <div class="address-overlay">{address}</div>
         <div class="start-time-overlay">{formatStartTime(now)}</div>
         <div class="pmax-value">{p_max}%</div>
-        <div class="pmax-label">(光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)</div>
+        <div class="pmax-label">
+            {#if isDemoMode}
+                (デモモード: 光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
+            {:else}
+                (光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
+            {/if}
+        </div>
     </div>
     <div class="tile-info-overlay">{addr_dict.X} {addr_dict.Y}</div>
     <div class="chart-container">
@@ -169,6 +207,11 @@
             <img src="/images/near_me.svg" alt="現在地に移動" />
         </button>
     </div>
+    {#if isDemoMode}
+        <div class="demo-banner">
+            デモモード
+        </div>
+    {/if}
 </div>
 
 <InfoModal isOpen={isInfoModalOpen} onClose={toggleInfoModal} />
@@ -340,5 +383,17 @@
     .current-location-button img {
         width: 24px;
         height: 24px;
+    }
+
+    .demo-banner {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        background-color: rgba(255, 255, 255, 0.7);
+        padding: 5px 10px;
+        border-radius: 4px;
+        border: 1px solid black;
+        font-size: 12px;
+        z-index: 10000;
     }
 </style>
