@@ -15,7 +15,7 @@
     let ox_array;
     let p_array;
     let p_max = 0;
-    let now;
+    let now = new Date("2015-07-27 06:00+09:00"); // undefinedは困る
     let ptable;
     let myChart;
     let center = [35.331586, 139.349782];
@@ -186,11 +186,7 @@
         <div class="start-time-overlay">{formatStartTime(now)}</div>
         <div class="pmax-value">{p_max}%</div>
         <div class="pmax-label">
-            {#if isDemoMode}
-                (デモモード: 光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
-            {:else}
-                (光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
-            {/if}
+            (光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
         </div>
     </div>
     <div class="tile-info-overlay">{addr_dict.X} {addr_dict.Y}</div>
