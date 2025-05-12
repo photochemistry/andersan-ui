@@ -7,6 +7,7 @@
     import { getChartConfig } from './chartConfig.js';
     import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor } from './utils.js';
     import InfoModal from './components/InfoModal.svelte';
+    import SunCalc from 'suncalc';
 
     let map;
     let ox_dict;
@@ -23,6 +24,8 @@
     let updateFlag = false;
     let isInfoModalOpen = false;
     let isDemoMode = false;
+    let sunriseTime = null;
+    let sunsetTime = null;
 
     function checkDemoMode() {
         const url = new URL(window.location.href);
@@ -58,7 +61,7 @@
 
         const ctx = document.getElementById('myChart')?.getContext('2d');
         if (ctx) {
-            myChart = new Chart(ctx, getChartConfig(ox_array, p_array, now, formatTime, getGradientColor));
+            myChart = new Chart(ctx, getChartConfig(ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime));
         }
     }
 
@@ -72,6 +75,13 @@
             ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
         ]);
         updateFlag = true;
+        updateSunTimes();
+    }
+
+    function updateSunTimes() {
+        const times = SunCalc.getTimes(now, center[0], center[1]);
+        sunriseTime = times.sunrise;
+        sunsetTime = times.sunset;
     }
 
     async function updateAddress() {
@@ -107,6 +117,7 @@
         map.on('moveend', updateAddress);
         updateCenter();
         updateAddress();
+        updateSunTimes();
     });
 
     const moveToCurrentLocation = () => {
@@ -188,6 +199,12 @@
         <div class="pmax-label">
             (光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
         </div>
+        <!-- {#if sunriseTime && sunsetTime}
+            <div class="sun-times">
+                <div>日の出: {formatTime(sunriseTime)}</div>
+                <div>日の入り: {formatTime(sunsetTime)}</div>
+            </div>
+        {/if} -->
     </div>
     <div class="tile-info-overlay">{addr_dict.X} {addr_dict.Y}</div>
     <div class="chart-container">
@@ -391,5 +408,12 @@
         border: 1px solid black;
         font-size: 12px;
         z-index: 10000;
+    }
+
+    .sun-times {
+        font-size: 10pt;
+        color: black;
+        margin-top: 5px;
+        text-align: center;
     }
 </style>

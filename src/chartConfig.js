@@ -1,4 +1,4 @@
-export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor) => {
+export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
     const y120 = Array(24).fill(120);
     const gradientColors = p_array.map(prob => getGradientColor(prob / 100));
 
@@ -98,9 +98,29 @@ export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientCo
         plugins: [{
             beforeDraw: (chart) => {
                 const ctx = chart.canvas.getContext('2d');
+                const { chartArea } = chart;
+                
+                // グラフの背景をクリア
                 ctx.save();
                 ctx.fillStyle = 'rgba(255, 255, 255, 0)';
                 ctx.fillRect(0, 0, chart.width, chart.height);
+                
+                // 夜間の時間帯を黒い長方形で表示
+                if (chartArea && sunriseTime && sunsetTime) {
+                    const sunriseHour = sunriseTime.getHours() + sunriseTime.getMinutes() / 60;
+                    const sunsetHour = sunsetTime.getHours() + sunsetTime.getMinutes() / 60;
+                    
+                    // 日の出前の時間帯（0時から日の出まで）
+                    const beforeSunriseWidth = (sunriseHour / 24) * chartArea.width;
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.20)';
+                    ctx.fillRect(chartArea.left, chartArea.top, beforeSunriseWidth, chartArea.height);
+                    
+                    // 日の入り後の時間帯（日の入りから24時まで）
+                    const afterSunsetWidth = ((24 - sunsetHour) / 24) * chartArea.width;
+                    const afterSunsetX = chartArea.left + (sunsetHour / 24) * chartArea.width;
+                    ctx.fillRect(afterSunsetX, chartArea.top, afterSunsetWidth, chartArea.height);
+                }
+                
                 ctx.restore();
             },
         }]
