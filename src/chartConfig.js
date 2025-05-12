@@ -2,6 +2,20 @@ export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientCo
     const y120 = Array(24).fill(120);
     const gradientColors = p_array.map(prob => getGradientColor(prob / 100));
 
+    // 現在時刻から24時までの時間数を計算
+    const currentHour = now.getHours();
+    const remainingHours = 24 - currentHour;
+    
+    // データを現在時刻以降のものだけに制限
+    const filteredOxArray = ox_array.slice(0, remainingHours);
+    const filteredGradientColors = gradientColors.slice(0, remainingHours);
+    const filteredY120 = y120.slice(0, remainingHours);
+
+    // 0時から現在時刻までのデータをnullで埋める
+    const paddedOxArray = Array(currentHour).fill(null).concat(filteredOxArray);
+    const paddedGradientColors = Array(currentHour).fill('rgba(255, 255, 255, 0)').concat(filteredGradientColors);
+    const paddedY120 = Array(24).fill(120); // 注意報レベルは常に120で24時間分
+
     return {
         type: 'line',
         data: {
@@ -9,7 +23,7 @@ export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientCo
             datasets: [
                 {
                     label: 'OX Prediction (ppb)',
-                    data: ox_array,
+                    data: paddedOxArray,
                     borderColor: 'rgb(75, 192, 192)',
                     tension: 0.1,
                     fill: {
@@ -17,23 +31,25 @@ export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientCo
                         above: ctx => {
                             const { ctx: context, chartArea } = ctx.chart;
                             const gradient = context.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
-                            gradientColors.forEach((color, i) => gradient.addColorStop(i / (gradientColors.length - 1), color));
+                            paddedGradientColors.forEach((color, i) => gradient.addColorStop(i / (paddedGradientColors.length - 1), color));
                             return gradient;
                         },
                     },
-                    backgroundColor: gradientColors,
+                    backgroundColor: paddedGradientColors,
                     yAxisID: 'y',
+                    spanGaps: true
                 },
                 {
                     type: 'line',
                     label: '注意報レベル',
-                    data: y120,
+                    data: paddedY120,
                     borderColor: 'red',
                     borderWidth: 2,
                     pointRadius: 0,
                     fill: false,
                     xAxisID: 'x',
-                    yAxisID: 'y'
+                    yAxisID: 'y',
+                    spanGaps: true
                 },
             ],
         },
@@ -49,9 +65,10 @@ export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientCo
                         mirror: true,
                         callback: (value, index) => {
                             if ((index + 1) % 3 === 0 || index === 0) {
-                                const futureTime = new Date(now);
-                                futureTime.setHours(now.getHours() + index + 1);
-                                return `${formatTime(futureTime)} (+${index + 1})`;
+                                const time = new Date(now);
+                                time.setHours(index);
+                                time.setMinutes(0);
+                                return `${formatTime(time)}`;
                             }
                             return null;
                         }
