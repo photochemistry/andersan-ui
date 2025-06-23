@@ -26,6 +26,7 @@
     let isDemoMode = false;
     let sunriseTime = null;
     let sunsetTime = null;
+    let serverBusy = false;
 
     function checkDemoMode() {
         const url = new URL(window.location.href);
@@ -50,18 +51,12 @@
         }
         if (ox_array === undefined || p_array === undefined) return;
 
-        if (p_array.some(isNaN)) {
-            console.warn("p_array contains NaN. Skipping chart drawing.");
-            const ctx = document.getElementById('myChart')?.getContext('2d');
-            if (ctx) {
-                ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-            }
-            return;
-        }
+        const safeOxArray = ox_array.map(v => isNaN(v) ? null : v);
+        const safePArray = p_array.map(v => isNaN(v) ? null : v);
 
         const ctx = document.getElementById('myChart')?.getContext('2d');
         if (ctx) {
-            myChart = new Chart(ctx, getChartConfig(ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime));
+            myChart = new Chart(ctx, getChartConfig(safeOxArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime));
         }
     }
 
@@ -70,12 +65,20 @@
         const c = map.getCenter();
         center = [c.lat, c.lng];
         console.log("center updated")
-        await Promise.all([
-            fetchData(now).then(result => { ox_dict = result }),
-            ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
-        ]);
-        updateFlag = true;
-        updateSunTimes();
+        serverBusy = false;
+        try {
+            await Promise.all([
+                fetchData(now).then(result => { ox_dict = result }),
+                ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
+            ]);
+            updateFlag = true;
+            updateSunTimes();
+        } catch (error) {
+            if (error.message === '503') {
+                serverBusy = true;
+            }
+            console.error(error);
+        }
     }
 
     function updateSunTimes() {
@@ -87,15 +90,23 @@
     async function updateAddress() {
         const c = map.getCenter();
         const { lat: latitude, lng: longitude } = c;
-        const a = await fetchAddress(longitude, latitude);
-        addr_dict = a;
-        const addressParts = a.address.split(',');
-        if (addressParts.length >= 4) {
-            const prefecture = addressParts[addressParts.length - 3].trim();
-            const city = addressParts[addressParts.length - 4].trim();
-            address = `${prefecture} ${city}`;
-        } else {
-            address = a.address;
+        serverBusy = false;
+        try {
+            const a = await fetchAddress(longitude, latitude);
+            addr_dict = a;
+            const addressParts = a.address.split(',');
+            if (addressParts.length >= 4) {
+                const prefecture = addressParts[addressParts.length - 3].trim();
+                const city = addressParts[addressParts.length - 4].trim();
+                address = `${prefecture} ${city}`;
+            } else {
+                address = a.address;
+            }
+        } catch (error) {
+            if (error.message === '503') {
+                serverBusy = true;
+            }
+            console.error(error);
         }
     }
 
@@ -223,6 +234,11 @@
     {#if isDemoMode}
         <div class="demo-banner">
             デモモード
+        </div>
+    {/if}
+    {#if serverBusy}
+        <div class="server-busy-banner">
+            サーバが混み合っています。しばらくしてから再度お試しください。
         </div>
     {/if}
 </div>
@@ -415,5 +431,20 @@
         color: black;
         margin-top: 5px;
         text-align: center;
+    }
+
+    .server-busy-banner {
+        position: fixed;
+        top: 50px;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: rgba(255, 0, 0, 0.8);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        font-size: 16px;
+        z-index: 20000;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        font-weight: bold;
     }
 </style>

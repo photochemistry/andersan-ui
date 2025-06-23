@@ -49,13 +49,16 @@ export async function fetchData(now) {
         let isostring = dateToISOString(now);
         let url = `${API_URL}/ox/v0a/kanagawa/${isostring}`;
         const response = await fetch(url);
+        if (response.status === 503) {
+            throw new Error('503');
+        }
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
         return data;
     } catch (error) {
-        console.error('データの取得中にエラーが発生しました:', error);
+        throw error;
     }
 }
 
@@ -63,13 +66,16 @@ export async function fetchAddress(lon, lat) {
     try {
         const url = `${API_URL}/loc/${lon}/${lat}`;
         const response = await fetch(url);
+        if (response.status === 503) {
+            throw new Error('503');
+        }
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
         return data;
     } catch (error) {
-        console.error('データの取得中にエラーが発生しました:', error);
+        throw error;
     }
 }
 
@@ -78,6 +84,9 @@ export async function fetchPtable(){
         const url = `${API_URL}/ptable/v0a`;
         console.log(url);
         const response = await fetch(url);
+        if (response.status === 503) {
+            throw new Error('503');
+        }
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
@@ -85,8 +94,7 @@ export async function fetchPtable(){
         console.log(data);
         return data;
     } catch (error) {
-        console.error('データの取得中にエラーが発生しました:', error);
-        // エラーハンドリングを行う
+        throw error;
     }
 }
 
