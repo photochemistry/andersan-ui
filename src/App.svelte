@@ -170,7 +170,7 @@
         if (ox_dict !== undefined && addr_dict !== undefined) {
             const row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
             ox_array = Array.from({length: 24}, (_, i) => 
-                Math.round(ox_dict.data[`+${i + 1}`][row])
+                Math.max(0, Math.round(ox_dict.data[`+${i + 1}`][row]))
             );
         }
 
