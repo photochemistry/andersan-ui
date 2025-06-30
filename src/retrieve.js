@@ -44,7 +44,7 @@ function getOneHourAgo(date) {
     return newDate;
 }
 
-export async function fetchData(now) {
+export async function fetchPredict(now) {
     try {
         let isostring = dateToISOString(now);
         let url = `${API_URL}/ox/v0a/kanagawa/${isostring}`;
@@ -56,6 +56,25 @@ export async function fetchData(now) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
+        return data;
+    } catch (error) {
+        throw error;
+    }
+}
+
+export async function fetchObserve(now) {
+    try {
+        let isostring = dateToISOString(now);
+        let url = `${API_URL}/obs/OX/kanagawa/${isostring}`;
+        const response = await fetch(url);
+        if (response.status === 503) {
+            throw new Error('503');
+        }
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        console.log(data);
         return data;
     } catch (error) {
         throw error;

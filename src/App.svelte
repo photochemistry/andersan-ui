@@ -2,7 +2,7 @@
     import { onMount, afterUpdate, onDestroy } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
-    import { fetchData, fetchAddress, fetchPtable } from './retrieve.js';
+    import { fetchPredict, fetchAddress, fetchPtable, fetchObserve } from './retrieve.js';
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
     import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor } from './utils.js';
