@@ -56,6 +56,7 @@ export async function fetchPredict(now) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
+        console.log(data.data.XY.slice(0, 5));
         return data;
     } catch (error) {
         throw error;
@@ -74,8 +75,12 @@ export async function fetchObserve(now) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        console.log(data);
-        return data;
+        //consoleに、data.XYのはじめの5つを出力
+        console.log(data.data.XY.slice(0, 5));
+
+        // None値をnullに変換して処理
+        const cleanData = JSON.parse(JSON.stringify(data).replace(/"None"/g, 'null'));
+        return cleanData;
     } catch (error) {
         throw error;
     }
@@ -83,7 +88,11 @@ export async function fetchObserve(now) {
 
 export async function fetchAddress(lon, lat) {
     try {
-        const url = `${API_URL}/loc/${lon}/${lat}`;
+        // lon, latは小数点3桁で丸める。
+        const roundedLon = Math.round(lon * 1000) / 1000;
+        const roundedLat = Math.round(lat * 1000) / 1000;
+
+        const url = `${API_URL}/loc/${roundedLon}/${roundedLat}`;
         const response = await fetch(url);
         if (response.status === 503) {
             throw new Error('503');
@@ -101,7 +110,6 @@ export async function fetchAddress(lon, lat) {
 export async function fetchPtable(){
     try {
         const url = `${API_URL}/ptable/v0a`;
-        console.log(url);
         const response = await fetch(url);
         if (response.status === 503) {
             throw new Error('503');
@@ -110,7 +118,6 @@ export async function fetchPtable(){
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        console.log(data);
         return data;
     } catch (error) {
         throw error;
