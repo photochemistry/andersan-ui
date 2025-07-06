@@ -1,4 +1,5 @@
-export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
+export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
+// export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
     const y120 = Array(24).fill(120);
     const gradientColors = p_array.map(prob => getGradientColor(prob / 100));
 

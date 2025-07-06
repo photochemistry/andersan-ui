@@ -5,15 +5,18 @@
     import { fetchPredict, fetchAddress, fetchPtable, fetchObserve } from './retrieve.js';
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
+    import annotationPlugin from 'chartjs-plugin-annotation';
     import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor } from './utils.js';
     import InfoModal from './components/InfoModal.svelte';
     import SunCalc from 'suncalc';
 
     let map;
     let ox_dict;
+    let ox_obs;
     let address = "";
     let addr_dict = {};
     let ox_array;
+    let ox_obs_array;
     let p_array;
     let p_max = 0;
     let now = new Date("2015-07-27 06:00+09:00"); // undefinedは困る
@@ -27,6 +30,13 @@
     let sunriseTime = null;
     let sunsetTime = null;
     let serverBusy = false;
+    let errorStatus = null;
+    let tileBoundaryLayer = null;
+
+    // 地図の表示領域を定数として設定
+    const MAP_TOP_PERCENT = 10; // 地図の上端位置（%）
+    const MAP_HEIGHT_PERCENT = 100 - MAP_TOP_PERCENT; // 地図の高さ（%）
+    const MAP_CENTER_PERCENT = MAP_TOP_PERCENT + (MAP_HEIGHT_PERCENT / 2); // 地図の中心位置（%）
 
     function checkDemoMode() {
         const url = new URL(window.location.href);
@@ -44,19 +54,21 @@
         }
     }
 
-    function drawChart(ox_array, p_array, now) {
-        if (myChart) {
+    function drawChart(ox_array, ox_obs_array, p_array, now) {
+            if (myChart) {
             myChart.destroy();
             myChart = null;
         }
-        if (ox_array === undefined || p_array === undefined) return;
+        if (ox_array === undefined || ox_obs_array === undefined || p_array === undefined) return;
+        // if (ox_array === undefined || p_array === undefined) return;
 
         const safeOxArray = ox_array.map(v => isNaN(v) ? null : v);
+        const safeOxObsArray = ox_obs_array.map(v => isNaN(v) ? null : v);
         const safePArray = p_array.map(v => isNaN(v) ? null : v);
-
+        console.log(safeOxObsArray)
         const ctx = document.getElementById('myChart')?.getContext('2d');
         if (ctx) {
-            myChart = new Chart(ctx, getChartConfig(safeOxArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime));
+            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime));
         }
     }
 
@@ -66,16 +78,33 @@
         center = [c.lat, c.lng];
         console.log("center updated")
         serverBusy = false;
+        
+        // 地図移動時にも照星の位置を調整
+        const bounds = map.getBounds();
+        const latRange = bounds.getNorth() - bounds.getSouth();
+        const offsetRatio = 0; // 位置確認のため0に設定
+        const adjustedLat = center[0] - (offsetRatio * latRange);
+        
+        // 調整された位置に地図を移動（ただし無限ループを避けるため条件付き）
+        const currentCenter = map.getCenter();
+        if (Math.abs(currentCenter.lat - adjustedLat) > 0.001) {
+            map.setView([adjustedLat, center[1]], map.getZoom());
+        }
+        
         try {
             await Promise.all([
-                fetchData(now).then(result => { ox_dict = result }),
+                fetchPredict(now).then(result => { ox_dict = result }),
+                fetchObserve(now).then(result => { ox_obs = result }),
                 ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
             ]);
             updateFlag = true;
             updateSunTimes();
         } catch (error) {
-            if (error.message === '503') {
+            if (error.message === '503' || error.message.includes('500')) {
                 serverBusy = true;
+                // エラー番号を抽出
+                const match = error.message.match(/\d+/);
+                errorStatus = match ? match[0] : null;
             }
             console.error(error);
         }
@@ -103,8 +132,11 @@
                 address = a.address;
             }
         } catch (error) {
-            if (error.message === '503') {
+            if (error.message === '503' || error.message.includes('500')) {
                 serverBusy = true;
+                // エラー番号を抽出
+                const match = error.message.match(/\d+/);
+                errorStatus = match ? match[0] : null;
             }
             console.error(error);
         }
@@ -116,20 +148,104 @@
     }
 
     onMount(() => {
+        // Chart.jsにannotationプラグインを登録
+        Chart.register(annotationPlugin);
+        
         checkDemoMode();
         updateNow();
-        map = L.map('map', { zoomControl: false }).setView([35.331586, 139.349782], 12);
+        // 地図の中心位置を上にずらして、照星が指す位置が正しいターゲット位置になるようにする
+        // 地図の上から20/70の位置が画面中央になるよう調整
+        const mapCenterLat = 35.331586;
+        const mapCenterLng = 139.349782;
+        
+        map = L.map('map', { zoomControl: false }).setView([mapCenterLat, mapCenterLng], 12);
 
         L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/blank/{z}/{x}/{y}.png', {
             maxZoom: 18,
             attribution: '© <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>'
         }).addTo(map);
 
+        // 地理院タイルの境界線を描画
+        drawTileBoundaries();
+
         map.on('moveend', updateAddress);
+        map.on('moveend', drawTileBoundaries); // 地図移動時に境界線を再描画
         updateCenter();
         updateAddress();
         updateSunTimes();
     });
+
+    function drawTileBoundaries() {
+        // 既存の境界線レイヤーを削除
+        if (tileBoundaryLayer) {
+            map.removeLayer(tileBoundaryLayer);
+        }
+
+        const fixedZoom = 12; // 固定のズームレベル
+        const bounds = map.getBounds();
+        
+        tileBoundaryLayer = L.layerGroup();
+        
+        // 地図の表示範囲内のタイル座標を計算（Z=12固定）
+        const tileBounds = getTileBounds(bounds, fixedZoom);
+        
+
+        
+        // 境界線を描画
+        for (let x = tileBounds.minX; x <= tileBounds.maxX; x++) {
+            for (let y = tileBounds.minY; y <= tileBounds.maxY; y++) {
+                const tileLatLngBounds = getTileLatLngBounds(x, y, fixedZoom);
+                
+                // 赤いタイル境界線を描画
+                const redTile = L.polygon([
+                    [tileLatLngBounds.south, tileLatLngBounds.west],
+                    [tileLatLngBounds.south, tileLatLngBounds.east],
+                    [tileLatLngBounds.north, tileLatLngBounds.east],
+                    [tileLatLngBounds.north, tileLatLngBounds.west]
+                ], {
+                    color: 'gray',
+                    weight: 1,
+                    opacity: 0.2,
+                    fillOpacity: 0
+                });
+                tileBoundaryLayer.addLayer(redTile);
+            }
+        }
+        
+        map.addLayer(tileBoundaryLayer);
+    }
+
+    function getTileBounds(bounds, zoom) {
+        const minTile = latLngToTile(bounds.getSouthWest(), zoom);
+        const maxTile = latLngToTile(bounds.getNorthEast(), zoom);
+        
+        return {
+            minX: Math.floor(minTile.x),
+            minY: Math.floor(Math.min(minTile.y, maxTile.y)),
+            maxX: Math.ceil(maxTile.x),
+            maxY: Math.ceil(Math.max(minTile.y, maxTile.y))
+        };
+    }
+
+    function latLngToTile(latLng, zoom) {
+        // 地理院タイルの座標系に合わせた変換
+        const n = Math.pow(2, zoom);
+        const lat_rad = latLng.lat * Math.PI / 180;
+        const x = ((latLng.lng + 180) / 360) * n;
+        const y = (1 - Math.asinh(Math.tan(lat_rad)) / Math.PI) * n / 2;
+        return { x, y };
+    }
+
+    function getTileLatLngBounds(x, y, zoom) {
+        // 地理院タイルの座標系に合わせた変換
+        const n = Math.pow(2, zoom);
+        const west = (x / n) * 360 - 180;
+        const east = ((x + 1) / n) * 360 - 180;
+        const north = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+        const south = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI;
+        
+        return { north, south, east, west };
+    }
 
     const moveToCurrentLocation = () => {
         if (!navigator.geolocation) {
@@ -173,8 +289,25 @@
                 Math.max(0, Math.round(ox_dict.data[`+${i + 1}`][row]))
             );
         }
-
-        if (ptable !== undefined && ox_array !== undefined) {
+        if (ox_obs !== undefined && addr_dict !== undefined) {
+            console.log(ox_obs.data.XY);
+            const row = findMatchingRowIndex(ox_obs.data.XY, addr_dict.X, addr_dict.Y);
+            ox_obs_array = Array.from({length: 24}, (_, i) => {
+                const dataKey = `${i - 23}`;
+                const dataArray = ox_obs.data[dataKey];
+                // console.log(dataArray)
+                // console.log(row, dataArray.length)
+                if (dataArray && row >= 0 && row < dataArray.length) {
+                    const value = dataArray[row];
+                    console.log(i-23, row, value)
+                    return value === null || isNaN(value) ? 0 : Math.max(0, Math.round(value));
+                }
+                return 0;
+            });
+        }
+        console.log(ox_obs.data)
+        console.log(ox_obs_array)
+        if (ptable !== undefined && ox_array !== undefined && ox_obs_array !== undefined) {
             p_array = ox_array.map(ox => {
                 const roundedOx = Math.floor(ox / 5) * 5;
                 const prob = ptable["120"][`(${roundedOx}, ${ox_array.indexOf(ox) + 1})`];
@@ -183,7 +316,8 @@
             p_max = Math.max(...p_array);
         }
 
-        drawChart(ox_array, p_array, now);
+        drawChart(ox_array, ox_obs_array, p_array, now);
+        // drawChart(ox_array, p_array, now);
     }
 
     onDestroy(() => {
@@ -203,7 +337,14 @@
     <div class="crosshair-container">
         <img class="crosshair" src="/images/crosshair.svg" alt="Target" />
     </div>
-    <div class="info-box">
+    <div class="info-box"
+        on:touchstart|stopPropagation
+        on:touchmove|stopPropagation
+        on:touchend|stopPropagation
+        on:mousedown|stopPropagation
+        on:mouseup|stopPropagation
+        on:click|stopPropagation
+    >
         <div class="address-overlay">{address}</div>
         <div class="start-time-overlay">{formatStartTime(now)}</div>
         <div class="pmax-value">{p_max}%</div>
@@ -239,6 +380,9 @@
     {#if serverBusy}
         <div class="server-busy-banner">
             サーバが混み合っています。しばらくしてから再度お試しください。
+            {#if errorStatus}
+                <span style="margin-left:8px;">(エラー番号: {errorStatus})</span>
+            {/if}
         </div>
     {/if}
 </div>
@@ -258,16 +402,17 @@
     }
 
     #map {
-        position: relative;
-        min-height: 100vh;
-        height: calc(100vh - env(safe-area-inset-bottom));
+        position: absolute;
+        top: 10vh;
+        left: 0;
+        height: 90vh;
         width: 100vw;
-        padding-bottom: env(safe-area-inset-bottom);
+        z-index: 100;
     }
 
     .crosshair-container {
         position: fixed;
-        top: 50%;
+        top: 55vh;
         left: 50%;
         transform: translate(-50%, -50%);
         z-index: 10000;
@@ -295,7 +440,7 @@
     }
 
     .chart-container {
-        position: absolute;
+        position: fixed;
         bottom: 0;
         left: 0;
         width: 100%;
@@ -346,7 +491,7 @@
     }
 
     .info-button-container {
-        position: absolute;
+        position: fixed;
         top: 20px;
         left: 20px;
         z-index: 1000;
@@ -355,7 +500,7 @@
     }
 
     .location-button-container {
-        position: absolute;
+        position: fixed;
         top: 20px;
         right: 20px;
         z-index: 1000;
