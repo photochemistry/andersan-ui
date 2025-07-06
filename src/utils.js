@@ -1,4 +1,7 @@
 export const findMatchingRowIndex = (array, targetValue1, targetValue2) => {
+    if (!array || !Array.isArray(array)) {
+        return -1;
+    }
     return array.findIndex(row => row[0] === targetValue1 && row[1] === targetValue2);
 };
 
