@@ -1,3 +1,5 @@
+import annotationPlugin from 'chartjs-plugin-annotation';
+
 export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
 // export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
     const y120 = Array(24).fill(120);
@@ -10,20 +12,21 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
     // データを現在時刻以降のものだけに制限
     const filteredOxArray = ox_array.slice(0, remainingHours);
     const filteredGradientColors = gradientColors.slice(0, remainingHours);
-    const filteredY120 = y120.slice(0, remainingHours);
-
+    // const filteredY120 = y120.slice(0, remainingHours);
+    const filteredOxObsArray = ox_obs_array.slice(23-currentHour, 24);
+    console.log(filteredOxObsArray)   
     // 0時から現在時刻までのデータをnullで埋める
-    const paddedOxArray = Array(currentHour).fill(null).concat(filteredOxArray);
-    const paddedGradientColors = Array(currentHour).fill('rgba(255, 255, 255, 0)').concat(filteredGradientColors);
-    const paddedY120 = Array(24).fill(120); // 注意報レベルは常に120で24時間分
-
+    const paddedOxArray = Array(currentHour+1).fill(null).concat(filteredOxArray);
+    const paddedGradientColors = Array(currentHour+1).fill('rgba(255, 255, 255, 0)').concat(filteredGradientColors);
+    const paddedY120 = Array(24+1).fill(120); // 注意報レベルは常に120で24時間分
+    const paddedOxObsArray = filteredOxObsArray.concat(Array(24-filteredOxObsArray.length).fill(null));
     return {
         type: 'line',
         data: {
-            labels: Array.from({length: 24}, (_, i) => i + 1),
+            labels: Array.from({length: 25}, (_, i) => i),
             datasets: [
                 {
-                    label: 'OX Prediction (ppb)',
+                    label: 'OX予測(ppb)',
                     data: paddedOxArray,
                     borderColor: 'rgb(75, 192, 192)',
                     tension: 0.1,
@@ -42,11 +45,24 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                 },
                 {
                     type: 'line',
-                    label: '注意報レベル',
+                    label: '注意報レベル(120ppb)',
                     data: paddedY120,
                     borderColor: 'red',
                     borderWidth: 2,
                     pointRadius: 0,
+                    fill: false,
+                    xAxisID: 'x',
+                    yAxisID: 'y',
+                    spanGaps: true
+                },
+                {
+                    // type: 'line',
+                    label: 'Ox実測値(ppb)',
+                    data: paddedOxObsArray,
+                    borderColor: 'blue',
+                    tension: 0.1,
+                    borderWidth: 2,
+                    // pointRadius: 0,
                     fill: false,
                     xAxisID: 'x',
                     yAxisID: 'y',
@@ -57,17 +73,23 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
         options: {
             responsive: true,
             maintainAspectRatio: false,
+            interaction: {
+                intersect: false,
+                mode: 'index'
+            },
             scales: {
                 x: {
-                    title: { display: true, text: 'Hours' },
+                    title: { display: false },
                     grid: { display: false },
                     ticks: {
+                        display: true,
                         align: 'inner',
                         mirror: true,
                         callback: (value, index) => {
-                            if ((index + 1) % 3 === 0 || index === 0) {
+                            const hour = index;
+                            if (hour === 6 || hour === 12 || hour === 18) {
                                 const time = new Date(now);
-                                time.setHours(index);
+                                time.setHours(hour);
                                 time.setMinutes(0);
                                 return `${formatTime(time)}`;
                             }
@@ -79,22 +101,82 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                     type: 'linear',
                     position: 'left',
                     beginAtZero: true,
-                    title: { display: true, text: 'OX (ppb)' },
+                    title: { display: false },
                     min: 0,
                     max: 150,
-                    grid: { display: true },
-                    border: { display: true },
-                    ticks: { stepSize: 30 }
+                    grid: { display: false },
+                    border: { display: false },
+                    ticks: { display: false }
                 },
                 'y-right': { display: false },
             },
             plugins: {
+                tooltip: {
+                    enabled: true,
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            const label = context.dataset.label || '';
+                            const value = context.parsed.y;
+                            if (value !== null && value !== undefined) {
+                                return `${label}: ${value}`;
+                            }
+                            return null;
+                        }
+                    }
+                },
                 legend: {
-                    labels: {
-                        filter: item => item.text !== 'Probability of exceeding 120ppm (%)'
+                    display: false
+                },
+                annotation: {
+                    annotations: {
+                        // 赤線（注意報レベル）のラベル
+                        redLineLabel: {
+                            type: 'label',
+                            xValue: 0,
+                            yValue: 120,
+                            content: '注意報レベル(120ppb)',
+                            color: 'red',
+                            font: {
+                                size: 12,
+                                weight: 'bold'
+                            },
+                            position: 'start'
+                        },
+                        // 青線（実測値）のラベル
+                        blueLineLabel: {
+                            type: 'label',
+                            xValue: 0,
+                            yValue: 50,
+                            content: 'Ox実測値(ppb)',
+                            color: 'blue',
+                            font: {
+                                size: 12,
+                                weight: 'bold'
+                            },
+                            position: 'start'
+                        },
+                        // 水色線（予測値）のラベル
+                        cyanLineLabel: {
+                            type: 'label',
+                            xValue: 24,
+                            yValue: 50,
+                            content: 'OX予測(ppb)',
+                            color: 'rgb(75, 192, 192)',
+                            font: {
+                                size: 12,
+                                weight: 'bold'
+                            },
+                            position: 'end',
+                            backgroundColor: 'white',
+                            borderColor: 'rgb(75, 192, 192)',
+                            borderWidth: 1,
+                            padding: 4
+                        }
                     }
                 }
-            }
+            },
         },
         plugins: [{
             beforeDraw: (chart) => {
