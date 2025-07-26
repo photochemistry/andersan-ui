@@ -5,10 +5,171 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>あんでるさんAndersan</title>
+        <style>
+            .diagnostic-message {
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: white;
+                border: 2px solid #ff6b6b;
+                border-radius: 8px;
+                padding: 20px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                z-index: 999999;
+                max-width: 90vw;
+                text-align: center;
+                font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', sans-serif;
+            }
+
+            .diagnostic-message h3 {
+                color: #ff6b6b;
+                margin-bottom: 15px;
+            }
+
+            .diagnostic-message ul {
+                text-align: left;
+                margin: 15px 0;
+            }
+
+            .diagnostic-progress {
+                background: #f0f0f0;
+                border-radius: 4px;
+                padding: 10px;
+                margin: 10px 0;
+                font-family: monospace;
+                font-size: 12px;
+            }
+
+            .step-ok {
+                color: #4CAF50;
+            }
+
+            .step-fail {
+                color: #f44336;
+            }
+
+            .step-waiting {
+                color: #ff9800;
+            }
+        </style>
     </head>
 
     <body>
+        <!-- 診断情報表示エリア -->
+        <div id="diagnostic-info" class="diagnostic-message" style="display: none;">
+            <h3>🔍 読み込み診断情報</h3>
+            <div class="diagnostic-progress" id="diagnostic-steps">
+                <div id="step-html" class="step-ok">✓ HTMLファイルの読み込み: 成功</div>
+                <div id="step-css" class="step-ok">✓ CSSスタイルの適用: 成功</div>
+                <div id="step-js" class="step-waiting">⏳ JavaScript実行: 確認中...</div>
+                <div id="step-modules" class="step-waiting">⏳ ESモジュール読み込み: 確認中...</div>
+                <div id="step-libs" class="step-waiting">⏳ 外部ライブラリ読み込み: 確認中...</div>
+                <div id="step-app" class="step-waiting">⏳ アプリケーション初期化: 確認中...</div>
+            </div>
+            <div id="diagnostic-details"></div>
+            <button onclick="toggleDiagnostic()"
+                style="margin-top: 15px; padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">診断情報を非表示</button>
+        </div>
+        <!-- JavaScriptが無効の場合の表示 -->
+        <noscript>
+            <div class="diagnostic-message">
+                <h3>⚠️ JavaScriptが無効になっています</h3>
+                <p>このアプリケーションを正常に表示するには、JavaScriptを有効にする必要があります。</p>
+                <ul>
+                    <li><strong>Chrome/Edge:</strong> 設定 → プライバシーとセキュリティ → サイトの設定 → JavaScript</li>
+                    <li><strong>Firefox:</strong> about:config → javascript.enabled を true に設定</li>
+                    <li><strong>Safari:</strong> 環境設定 → セキュリティ → JavaScriptを有効にする</li>
+                </ul>
+                <p>社内ブラウザの場合は、システム管理者にご相談ください。</p>
+            </div>
+        </noscript>
         <div id="app"></div>
+        <script>
+            // 診断情報の初期化
+            let diagnosticVisible = false;
+            let diagnosticStartTime = Date.now();
+
+            function updateStep(stepId, status, message) {
+                const step = document.getElementById(stepId);
+                if (step) {
+                    step.className = status === 'ok' ? 'step-ok' : status === 'fail' ? 'step-fail' : 'step-waiting';
+                    const icon = status === 'ok' ? '✓' : status === 'fail' ? '✗' : '⏳';
+                    step.textContent = `${icon} ${message}`;
+                }
+            }
+
+            function showDiagnostic(force = false) {
+                const diagnostic = document.getElementById('diagnostic-info');
+                if (diagnostic && (force || Date.now() - diagnosticStartTime > 3000)) {
+                    diagnostic.style.display = 'block';
+                    diagnosticVisible = true;
+                }
+            }
+
+            function toggleDiagnostic() {
+                const diagnostic = document.getElementById('diagnostic-info');
+                if (diagnostic) {
+                    diagnostic.style.display = diagnosticVisible ? 'none' : 'block';
+                    diagnosticVisible = !diagnosticVisible;
+                }
+            }
+
+            // JavaScriptが実行されていることを示す
+            updateStep('step-js', 'ok', 'JavaScript実行: 成功');
+
+            // モジュール読み込みの監視
+            let moduleLoadTimeout = setTimeout(() => {
+                updateStep('step-modules', 'fail', 'ESモジュール読み込み: タイムアウト（おそらくブロックされています）');
+                showDiagnostic(true);
+            }, 5000);
+
+            // ページが完全に読み込まれない場合の診断表示
+            setTimeout(() => {
+                if (!window.svelteAppLoaded) {
+                    showDiagnostic(true);
+                }
+            }, 3000);
+
+            // グローバル変数でモジュール読み込み成功を追跡
+            window.markModuleLoaded = function () {
+                clearTimeout(moduleLoadTimeout);
+                updateStep('step-modules', 'ok', 'ESモジュール読み込み: 成功');
+            };
+
+            window.markLibsLoaded = function (libs) {
+                updateStep('step-libs', 'ok', `外部ライブラリ読み込み: 成功 (${libs.join(', ')})`);
+            };
+
+            window.markAppLoaded = function () {
+                updateStep('step-app', 'ok', 'アプリケーション初期化: 成功');
+                window.svelteAppLoaded = true;
+                // 成功時は診断情報を一定時間後に自動で隠す
+                setTimeout(() => {
+                    if (diagnosticVisible) {
+                        toggleDiagnostic();
+                    }
+                }, 2000);
+            };
+
+            // エラーハンドリング
+            window.addEventListener('error', function (e) {
+                const details = document.getElementById('diagnostic-details');
+                if (details) {
+                    details.innerHTML = `<div style="color: #f44336; margin-top: 10px;"><strong>エラー詳細:</strong><br>${e.message}<br>ファイル: ${e.filename}<br>行: ${e.lineno}</div>`;
+                }
+                showDiagnostic(true);
+            });
+
+            // 未処理のPromise拒否をキャッチ
+            window.addEventListener('unhandledrejection', function (e) {
+                const details = document.getElementById('diagnostic-details');
+                if (details) {
+                    details.innerHTML = `<div style="color: #f44336; margin-top: 10px;"><strong>Promise エラー:</strong><br>${e.reason}</div>`;
+                }
+                showDiagnostic(true);
+            });
+        </script>
         <script type="module" src="/src/main.js"></script>
     </body>
 

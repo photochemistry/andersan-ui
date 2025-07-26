@@ -10,6 +10,16 @@
     import InfoModal from './components/InfoModal.svelte';
     import SunCalc from 'suncalc';
 
+    // 外部ライブラリの読み込み状況を通知
+    let loadedLibraries = [];
+    if (typeof L !== 'undefined') loadedLibraries.push('Leaflet');
+    if (typeof Chart !== 'undefined') loadedLibraries.push('Chart.js');
+    if (typeof SunCalc !== 'undefined') loadedLibraries.push('SunCalc');
+    
+    if (window.markLibsLoaded && loadedLibraries.length > 0) {
+        window.markLibsLoaded(loadedLibraries);
+    }
+
     let map;
     let ox_dict;
     let ox_obs;
@@ -46,6 +56,7 @@
     function updateNow() {
         if (isDemoMode) {
             now = new Date("2015-07-27 06:00+09:00");
+            // now = new Date("2025-07-23 12:00+09:00");
         } else {
             now = new Date();
             now.setMinutes(0);
