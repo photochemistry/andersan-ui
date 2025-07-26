@@ -142,7 +142,11 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                                 size: 12,
                                 weight: 'bold'
                             },
-                            position: 'start'
+                            position: 'start',
+                            backgroundColor: 'white',
+                            borderColor: 'red',
+                            borderWidth: 1,
+                            padding: 4
                         },
                         // 青線（実測値）のラベル
                         blueLineLabel: {
@@ -155,7 +159,11 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                                 size: 12,
                                 weight: 'bold'
                             },
-                            position: 'start'
+                            position: 'start',
+                            backgroundColor: 'white',
+                            borderColor: 'blue',
+                            borderWidth: 1,
+                            padding: 4
                         },
                         // 水色線（予測値）のラベル
                         cyanLineLabel: {
