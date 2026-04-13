@@ -27,7 +27,7 @@ export default defineConfig({
       key: fs.readFileSync(`${homeDir}/certs/privkey.pem`),
       cert: fs.readFileSync(`${homeDir}/certs/fullchain.pem`)
     },
-    allowedHosts: ['andersan.riis.okayama-u.ac.jp'],
+    allowedHosts: ['andersan.net'],
     proxy: {
       '/api': {
         target: 'http://localhost:8087',

@@ -2,7 +2,7 @@
     import { onMount, afterUpdate, onDestroy } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
-    import { fetchPredict, fetchAddress, fetchPtable, fetchObserve } from './retrieve.js';
+    import { fetchPredict, fetchAddress, fetchPtable, fetchObserve, PREDICT_ALGORITHM } from './retrieve.js';
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
     import annotationPlugin from 'chartjs-plugin-annotation';
@@ -42,6 +42,8 @@
     let serverBusy = false;
     let errorStatus = null;
     let tileBoundaryLayer = null;
+    /** @type {{ anchorHour: number, anchorDate: Date, data: object }[]} */
+    let pastPredictDicts = [];
 
     // 地図の表示領域を定数として設定
     const MAP_TOP_PERCENT = 10; // 地図の上端位置（%）
@@ -65,7 +67,30 @@
         }
     }
 
-    function drawChart(ox_array, ox_obs_array, p_array, now) {
+    /** ローカル暦で a と b が同一日か */
+    function sameLocalCalendarDay(a, b) {
+        return (
+            a.getFullYear() === b.getFullYear() &&
+            a.getMonth() === b.getMonth() &&
+            a.getDate() === b.getDate()
+        );
+    }
+
+    /** 当日の正時ベースで、現在時刻より前の 0,3,6,... 時を起点とする日時一覧 */
+    function pastForecastAnchorDates(nowRef) {
+        const base = new Date(nowRef.getTime());
+        base.setMinutes(0, 0, 0);
+        const H = base.getHours();
+        const out = [];
+        for (let h = 0; h < H; h += 3) {
+            const d = new Date(base.getTime());
+            d.setHours(h, 0, 0, 0);
+            out.push(d);
+        }
+        return out;
+    }
+
+    function drawChart(ox_array, ox_obs_array, p_array, now, pastForecasts) {
             if (myChart) {
             myChart.destroy();
             myChart = null;
@@ -79,11 +104,12 @@
         console.log(safeOxObsArray)
         const ctx = document.getElementById('myChart')?.getContext('2d');
         if (ctx) {
-            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime));
+            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts));
         }
     }
 
     async function updateCenter() {
+        updateNow();
         updateFlag = false;
         const c = map.getCenter();
         center = [c.lat, c.lng];
@@ -103,11 +129,25 @@
         }
         
         try {
-            await Promise.all([
-                fetchPredict(now).then(result => { ox_dict = result }),
-                fetchObserve(now).then(result => { ox_obs = result }),
-                ptable === undefined ? fetchPtable().then(result => { ptable = result }) : Promise.resolve()
+            pastPredictDicts = [];
+            const anchorDates = pastForecastAnchorDates(now);
+            const pastPromises = anchorDates.map((d) => fetchPredict(d));
+            const [predRes, obsRes, ptRes, pastSettled] = await Promise.all([
+                fetchPredict(now),
+                fetchObserve(now),
+                ptable === undefined ? fetchPtable() : Promise.resolve(null),
+                Promise.allSettled(pastPromises)
             ]);
+            ox_dict = predRes;
+            ox_obs = obsRes;
+            if (ptable === undefined && ptRes != null) {
+                ptable = ptRes;
+            }
+            pastPredictDicts = anchorDates.map((d, i) => ({
+                anchorHour: d.getHours(),
+                anchorDate: new Date(d.getTime()),
+                data: pastSettled[i].status === 'fulfilled' ? pastSettled[i].value : null
+            })).filter((x) => x.data != null);
             updateFlag = true;
             updateSunTimes();
         } catch (error) {
@@ -118,6 +158,7 @@
                 errorStatus = match ? match[0] : null;
             }
             console.error(error);
+            pastPredictDicts = [];
         }
     }
 
@@ -327,7 +368,26 @@
             p_max = Math.max(...p_array);
         }
 
-        drawChart(ox_array, ox_obs_array, p_array, now);
+        /** @type {{ anchorHour: number, padded: (number|null)[] }[]} */
+        let pastForecasts = [];
+        if (addr_dict !== undefined && pastPredictDicts.length) {
+            for (const { anchorHour, anchorDate, data } of pastPredictDicts) {
+                if (!sameLocalCalendarDay(anchorDate, now)) continue;
+                const row = findMatchingRowIndex(data.data.XY, addr_dict.X, addr_dict.Y);
+                if (row < 0) continue;
+                const ox = Array.from({ length: 24 }, (_, i) =>
+                    Math.max(0, Math.round(data.data[`+${i + 1}`][row]))
+                );
+                const padded = Array(25).fill(null);
+                for (let t = anchorHour + 1; t <= 24; t++) {
+                    const k = t - anchorHour;
+                    if (k >= 1 && k <= 24) padded[t] = ox[k - 1];
+                }
+                pastForecasts.push({ anchorHour, padded });
+            }
+        }
+
+        drawChart(ox_array, ox_obs_array, p_array, now, pastForecasts);
         // drawChart(ox_array, p_array, now);
     }
 
@@ -344,10 +404,8 @@
     });
 </script>
 
-<div id="map">
-    <div class="crosshair-container">
-        <img class="crosshair" src="/images/crosshair.svg" alt="Target" />
-    </div>
+<div class="map-viewport">
+    <div id="map">
     <div class="info-box"
         on:touchstart|stopPropagation
         on:touchmove|stopPropagation
@@ -396,6 +454,63 @@
             {/if}
         </div>
     {/if}
+    <div class="algorithm-badge">予測アルゴリズム {PREDICT_ALGORITHM}</div>
+    </div>
+    <div class="crosshair-container" aria-hidden="true">
+        <svg class="crosshair" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+            <circle
+                cx="16"
+                cy="16"
+                r="13.1"
+                fill="none"
+                stroke="#e91f00"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-miterlimit="10"
+            />
+            <line
+                x1="1"
+                y1="16"
+                x2="12.2"
+                y2="16"
+                stroke="#e91f00"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-miterlimit="10"
+            />
+            <line
+                x1="19.8"
+                y1="16"
+                x2="31"
+                y2="16"
+                stroke="#e91f00"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-miterlimit="10"
+            />
+            <line
+                x1="16"
+                y1="1"
+                x2="16"
+                y2="12.2"
+                stroke="#e91f00"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-miterlimit="10"
+            />
+            <line
+                x1="16"
+                y1="19.8"
+                x2="16"
+                y2="31"
+                stroke="#e91f00"
+                stroke-width="1.9"
+                stroke-linecap="round"
+                stroke-miterlimit="10"
+            />
+            <circle cx="16" cy="16" r="0.9" fill="#e91f00" />
+        </svg>
+    </div>
 </div>
 
 <InfoModal isOpen={isInfoModalOpen} onClose={toggleInfoModal} />
@@ -412,13 +527,19 @@
         z-index: 10000;
     }
 
-    #map {
+    .map-viewport {
         position: absolute;
         top: 10vh;
         left: 0;
         height: 90vh;
         width: 100vw;
         z-index: 100;
+    }
+
+    #map {
+        position: relative;
+        width: 100%;
+        height: 100%;
     }
 
     .crosshair-container {
@@ -431,6 +552,12 @@
         display: flex;
         justify-content: center;
         align-items: center;
+    }
+
+    .crosshair {
+        display: block;
+        width: 32px;
+        height: 32px;
     }
 
     .info-box {
@@ -602,5 +729,20 @@
         z-index: 20000;
         box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         font-weight: bold;
+    }
+
+    .algorithm-badge {
+        position: fixed;
+        bottom: 8px;
+        right: 8px;
+        font-size: 10px;
+        line-height: 1.2;
+        color: #333;
+        background-color: rgba(255, 255, 255, 0.55);
+        padding: 2px 6px;
+        border-radius: 3px;
+        border: 1px solid rgba(0, 0, 0, 0.12);
+        z-index: 1100;
+        pointer-events: none;
     }
 </style>

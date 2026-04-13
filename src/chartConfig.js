@@ -1,6 +1,6 @@
 import annotationPlugin from 'chartjs-plugin-annotation';
 
-export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
+export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts = []) => {
 // export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
     const y120 = Array(24).fill(120);
     const gradientColors = p_array.map(prob => getGradientColor(prob / 100));
@@ -20,11 +20,55 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
     const paddedGradientColors = Array(currentHour+1).fill('rgba(255, 255, 255, 0)').concat(filteredGradientColors);
     const paddedY120 = Array(24+1).fill(120); // 注意報レベルは常に120で24時間分
     const paddedOxObsArray = filteredOxObsArray.concat(Array(24-filteredOxObsArray.length).fill(null));
+
+    const pastPredictDatasets = (pastForecasts || []).map(({ anchorHour, padded }) => ({
+        label: `OX予測(${anchorHour}時起点)`,
+        data: padded,
+        borderColor: 'rgba(75, 192, 192, 0.5)',
+        backgroundColor: 'rgba(0, 0, 0, 0)',
+        tension: 0.1,
+        fill: false,
+        borderWidth: 2,
+        pointRadius: 0,
+        xAxisID: 'x',
+        yAxisID: 'y',
+        spanGaps: true,
+        order: 0
+    }));
+
     return {
         type: 'line',
         data: {
             labels: Array.from({length: 25}, (_, i) => i),
             datasets: [
+                ...pastPredictDatasets,
+                {
+                    type: 'line',
+                    label: '注意報レベル(120ppb)',
+                    data: paddedY120,
+                    borderColor: 'red',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: false,
+                    xAxisID: 'x',
+                    yAxisID: 'y',
+                    spanGaps: true,
+                    order: 2
+                },
+                {
+                    // type: 'line',
+                    label: 'Ox実測値(ppb)',
+                    data: paddedOxObsArray,
+                    borderColor: 'blue',
+                    tension: 0.1,
+                    borderWidth: 2,
+                    // pointRadius: 0,
+                    fill: false,
+                    xAxisID: 'x',
+                    yAxisID: 'y',
+                    spanGaps: true,
+                    order: 3
+                },
                 {
                     label: 'OX予測(ppb)',
                     data: paddedOxArray,
@@ -41,32 +85,8 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                     },
                     backgroundColor: paddedGradientColors,
                     yAxisID: 'y',
-                    spanGaps: true
-                },
-                {
-                    type: 'line',
-                    label: '注意報レベル(120ppb)',
-                    data: paddedY120,
-                    borderColor: 'red',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: false,
-                    xAxisID: 'x',
-                    yAxisID: 'y',
-                    spanGaps: true
-                },
-                {
-                    // type: 'line',
-                    label: 'Ox実測値(ppb)',
-                    data: paddedOxObsArray,
-                    borderColor: 'blue',
-                    tension: 0.1,
-                    borderWidth: 2,
-                    // pointRadius: 0,
-                    fill: false,
-                    xAxisID: 'x',
-                    yAxisID: 'y',
-                    spanGaps: true
+                    spanGaps: true,
+                    order: 4
                 },
             ],
         },

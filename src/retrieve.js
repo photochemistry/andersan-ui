@@ -1,5 +1,8 @@
 // const API_URL="http://172.23.78.71:8087"
 const API_URL="/api"
+
+/** 予測・ptable API のアルゴリズム ID（/ox/{id}/… /ptable/{id}） */
+export const PREDICT_ALGORITHM = 'a1';
 const API_BASE = API_URL.replace(/\/api$/, ''); // /api を削除
 
 export function dateToJSTString(date) {
@@ -47,7 +50,7 @@ function getOneHourAgo(date) {
 export async function fetchPredict(now) {
     try {
         let isostring = dateToISOString(now);
-        let url = `${API_URL}/ox/v0a/kanagawa/${isostring}`;
+        let url = `${API_URL}/ox/${PREDICT_ALGORITHM}/kanagawa/${isostring}`;
         const response = await fetch(url);
         if (response.status === 503) {
             throw new Error('503');
@@ -109,7 +112,7 @@ export async function fetchAddress(lon, lat) {
 
 export async function fetchPtable(){
     try {
-        const url = `${API_URL}/ptable/v0a`;
+        const url = `${API_URL}/ptable/${PREDICT_ALGORITHM}`;
         const response = await fetch(url);
         if (response.status === 503) {
             throw new Error('503');
