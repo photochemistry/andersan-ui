@@ -1,8 +1,25 @@
 // const API_URL="http://172.23.78.71:8087"
 const API_URL="/api"
 
-/** 予測・ptable API のアルゴリズム ID（/ox/{id}/… /ptable/{id}） */
-export const PREDICT_ALGORITHM = 'a1';
+/** 利用可能な予測アルゴリズム */
+export const PREDICT_ALGORITHMS = {
+    a1: 'andersan1 (a1)',
+    a4_1: 'andersan4_1 (a4_1)'
+};
+
+/** 現在選択中の予測アルゴリズム ID */
+let currentPredictAlgorithm = 'a1';
+
+export function getPredictAlgorithm() {
+    return currentPredictAlgorithm;
+}
+
+export function setPredictAlgorithm(nextAlgorithm) {
+    if (!Object.prototype.hasOwnProperty.call(PREDICT_ALGORITHMS, nextAlgorithm)) {
+        throw new Error(`Unknown algorithm: ${nextAlgorithm}`);
+    }
+    currentPredictAlgorithm = nextAlgorithm;
+}
 const API_BASE = API_URL.replace(/\/api$/, ''); // /api を削除
 
 export function dateToJSTString(date) {
@@ -50,7 +67,10 @@ function getOneHourAgo(date) {
 export async function fetchPredict(now) {
     try {
         let isostring = dateToISOString(now);
-        let url = `${API_URL}/ox/${PREDICT_ALGORITHM}/kanagawa/${isostring}`;
+        const isQuantileModel = currentPredictAlgorithm === 'a4_1';
+        let url = isQuantileModel
+            ? `${API_URL}/oxq/a4_1/kanagawa/${isostring}`
+            : `${API_URL}/ox/${currentPredictAlgorithm}/kanagawa/${isostring}`;
         const response = await fetch(url);
         if (response.status === 503) {
             throw new Error('503');
@@ -110,9 +130,13 @@ export async function fetchAddress(lon, lat) {
     }
 }
 
-export async function fetchPtable(){
+export async function fetchPgt120(now){
     try {
-        const url = `${API_URL}/ptable/${PREDICT_ALGORITHM}`;
+        const isostring = dateToISOString(now);
+        const isQuantileModel = currentPredictAlgorithm === 'a4_1';
+        const url = isQuantileModel
+            ? `${API_URL}/oxq/a4_1/pgt120/kanagawa/${isostring}`
+            : `${API_URL}/ox/${currentPredictAlgorithm}/pgt120/kanagawa/${isostring}`;
         const response = await fetch(url);
         if (response.status === 503) {
             throw new Error('503');

@@ -2,7 +2,15 @@
     import { onMount, afterUpdate, onDestroy } from 'svelte';
     import 'leaflet/dist/leaflet.css';
     import L from 'leaflet';
-    import { fetchPredict, fetchAddress, fetchPtable, fetchObserve, PREDICT_ALGORITHM } from './retrieve.js';
+    import {
+        fetchPredict,
+        fetchAddress,
+        fetchPgt120,
+        fetchObserve,
+        PREDICT_ALGORITHMS,
+        getPredictAlgorithm,
+        setPredictAlgorithm
+    } from './retrieve.js';
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
     import annotationPlugin from 'chartjs-plugin-annotation';
@@ -30,7 +38,7 @@
     let p_array;
     let p_max = 0;
     let now = new Date("2015-07-27 06:00+09:00"); // undefinedは困る
-    let ptable;
+    let pgt120_dict;
     let myChart;
     let center = [35.331586, 139.349782];
     let debounceTimer;
@@ -42,8 +50,14 @@
     let serverBusy = false;
     let errorStatus = null;
     let tileBoundaryLayer = null;
+    let predictSourceTime = null;
+    let predictCachedAt = null;
+    let observeSourceTime = null;
+    let observeCachedAt = null;
     /** @type {{ anchorHour: number, anchorDate: Date, data: object }[]} */
     let pastPredictDicts = [];
+    let selectedAlgorithm = getPredictAlgorithm();
+    let algorithmOptions = Object.entries(PREDICT_ALGORITHMS).map(([value, label]) => ({ value, label }));
 
     // 地図の表示領域を定数として設定
     const MAP_TOP_PERCENT = 10; // 地図の上端位置（%）
@@ -65,6 +79,26 @@
             now.setSeconds(0);
             now.setMilliseconds(0);
         }
+    }
+
+    function parseApiTime(value) {
+        if (!value || typeof value !== 'string') return null;
+        const d = new Date(value);
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    function formatApiDateTime(date) {
+        if (!date) return '-';
+        return `${date.getMonth() + 1}/${date.getDate()} ${formatTime(date)}`;
+    }
+
+    function extractTimeFields(payload) {
+        const sourceRaw = payload?.source_time ?? payload?.meta?.source_time ?? null;
+        const cachedRaw = payload?.cached_at ?? payload?.meta?.cached_at ?? null;
+        return {
+            sourceTime: parseApiTime(sourceRaw),
+            cachedAt: parseApiTime(cachedRaw)
+        };
     }
 
     /** ローカル暦で a と b が同一日か */
@@ -132,17 +166,33 @@
             pastPredictDicts = [];
             const anchorDates = pastForecastAnchorDates(now);
             const pastPromises = anchorDates.map((d) => fetchPredict(d));
-            const [predRes, obsRes, ptRes, pastSettled] = await Promise.all([
+            const [predRes, obsRes, pgtRes, pastSettled] = await Promise.all([
                 fetchPredict(now),
                 fetchObserve(now),
-                ptable === undefined ? fetchPtable() : Promise.resolve(null),
+                fetchPgt120(now).catch((error) => {
+                    console.warn('pgt120 fetch failed', error);
+                    return null;
+                }),
                 Promise.allSettled(pastPromises)
             ]);
             ox_dict = predRes;
             ox_obs = obsRes;
-            if (ptable === undefined && ptRes != null) {
-                ptable = ptRes;
-            }
+            const predTimes = extractTimeFields(predRes);
+            const obsTimes = extractTimeFields(obsRes);
+            predictSourceTime = predTimes.sourceTime;
+            predictCachedAt = predTimes.cachedAt;
+            observeSourceTime = obsTimes.sourceTime;
+            observeCachedAt = obsTimes.cachedAt;
+            console.log('[debug][timing] fetch timestamps', {
+                requestedAt: now.toISOString(),
+                predictSourceTime: predictSourceTime?.toISOString() ?? null,
+                predictCachedAt: predictCachedAt?.toISOString() ?? null,
+                observeSourceTime: observeSourceTime?.toISOString() ?? null,
+                observeCachedAt: observeCachedAt?.toISOString() ?? null,
+                predictSourceDiffersFromRequested:
+                    !!(predictSourceTime && predictSourceTime.getTime() !== now.getTime())
+            });
+            pgt120_dict = pgtRes;
             pastPredictDicts = anchorDates.map((d, i) => ({
                 anchorHour: d.getHours(),
                 anchorDate: new Date(d.getTime()),
@@ -158,6 +208,10 @@
                 errorStatus = match ? match[0] : null;
             }
             console.error(error);
+            predictSourceTime = null;
+            predictCachedAt = null;
+            observeSourceTime = null;
+            observeCachedAt = null;
             pastPredictDicts = [];
         }
     }
@@ -333,12 +387,36 @@
         isInfoModalOpen = !isInfoModalOpen;
     }
 
+    function getPredictSeriesValue(data, horizon, row, algorithm) {
+        const primaryKey = algorithm === 'a4_1' ? `+${horizon}_q50` : `+${horizon}`;
+        const fallbackKey = `+${horizon}`;
+        const values = data?.[primaryKey] ?? data?.[fallbackKey];
+        if (!values || row < 0 || row >= values.length) return 0;
+        const value = values[row];
+        return value === null || isNaN(value) ? 0 : Math.max(0, Math.round(value));
+    }
+
+    async function handleAlgorithmChange(event) {
+        const nextAlgorithm = event.target.value;
+        setPredictAlgorithm(nextAlgorithm);
+        selectedAlgorithm = nextAlgorithm;
+        updateFlag = false;
+        ox_array = undefined;
+        p_array = undefined;
+        if (myChart) {
+            myChart.destroy();
+            myChart = null;
+        }
+        await updateCenter();
+    }
+
     $: if (updateFlag) {
         updateNow();
         if (ox_dict !== undefined && addr_dict !== undefined) {
+            const currentAlgorithm = getPredictAlgorithm();
             const row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
-            ox_array = Array.from({length: 24}, (_, i) => 
-                Math.max(0, Math.round(ox_dict.data[`+${i + 1}`][row]))
+            ox_array = Array.from({length: 24}, (_, i) =>
+                getPredictSeriesValue(ox_dict.data, i + 1, row, currentAlgorithm)
             );
         }
         if (ox_obs !== undefined && addr_dict !== undefined) {
@@ -359,13 +437,17 @@
         }
         console.log(ox_obs.data)
         console.log(ox_obs_array)
-        if (ptable !== undefined && ox_array !== undefined && ox_obs_array !== undefined) {
-            p_array = ox_array.map(ox => {
-                const roundedOx = Math.floor(ox / 5) * 5;
-                const prob = ptable["120"][`(${roundedOx}, ${ox_array.indexOf(ox) + 1})`];
-                return prob === undefined || isNaN(prob) ? NaN : Math.round(prob * 100);
+        if (pgt120_dict !== undefined && pgt120_dict !== null && ox_array !== undefined && ox_obs_array !== undefined && addr_dict !== undefined) {
+            const pgtRow = findMatchingRowIndex(pgt120_dict.data.XY, addr_dict.X, addr_dict.Y);
+            p_array = Array.from({ length: 24 }, (_, i) => {
+                const prob = pgt120_dict?.data?.[`+${i + 1}_p_gt_120`]?.[pgtRow];
+                return prob === undefined || prob === null || isNaN(prob) ? NaN : Math.round(prob * 100);
             });
-            p_max = Math.max(...p_array);
+            const validProbabilities = p_array.filter(v => Number.isFinite(v));
+            p_max = validProbabilities.length ? Math.max(...validProbabilities) : 0;
+        } else {
+            p_array = Array.from({ length: 24 }, () => NaN);
+            p_max = 0;
         }
 
         /** @type {{ anchorHour: number, padded: (number|null)[] }[]} */
@@ -375,8 +457,9 @@
                 if (!sameLocalCalendarDay(anchorDate, now)) continue;
                 const row = findMatchingRowIndex(data.data.XY, addr_dict.X, addr_dict.Y);
                 if (row < 0) continue;
+                const currentAlgorithm = getPredictAlgorithm();
                 const ox = Array.from({ length: 24 }, (_, i) =>
-                    Math.max(0, Math.round(data.data[`+${i + 1}`][row]))
+                    getPredictSeriesValue(data.data, i + 1, row, currentAlgorithm)
                 );
                 const padded = Array(25).fill(null);
                 for (let t = anchorHour + 1; t <= 24; t++) {
@@ -387,7 +470,8 @@
             }
         }
 
-        drawChart(ox_array, ox_obs_array, p_array, now, pastForecasts);
+        const chartBaseTime = predictSourceTime ?? now;
+        drawChart(ox_array, ox_obs_array, p_array, chartBaseTime, pastForecasts);
         // drawChart(ox_array, p_array, now);
     }
 
@@ -417,6 +501,8 @@
         <div class="address-overlay">{address}</div>
         <div class="start-time-overlay">{formatStartTime(now)}</div>
         <div class="pmax-value">{p_max}%</div>
+        <div class="source-time-overlay">予測基準: {formatApiDateTime(predictSourceTime)}</div>
+        <div class="source-time-overlay">観測基準: {formatApiDateTime(observeSourceTime)}</div>
         <div class="pmax-label">
             (光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
         </div>
@@ -454,7 +540,15 @@
             {/if}
         </div>
     {/if}
-    <div class="algorithm-badge">予測アルゴリズム {PREDICT_ALGORITHM}</div>
+    <div class="algorithm-switcher">
+        <label for="algorithm-select">予測アルゴリズム</label>
+        <select id="algorithm-select" bind:value={selectedAlgorithm} on:change={handleAlgorithmChange}>
+            {#each algorithmOptions as option}
+                <option value={option.value}>{option.label}</option>
+            {/each}
+        </select>
+        <div class="algorithm-current">{PREDICT_ALGORITHMS[selectedAlgorithm]}</div>
+    </div>
     </div>
     <div class="crosshair-container" aria-hidden="true">
         <svg class="crosshair" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
@@ -628,6 +722,12 @@
         color: black;
     }
 
+    .source-time-overlay {
+        font-size: 9pt;
+        color: #333;
+        line-height: 1.2;
+    }
+
     .info-button-container {
         position: fixed;
         top: 20px;
@@ -731,18 +831,36 @@
         font-weight: bold;
     }
 
-    .algorithm-badge {
+    .algorithm-switcher {
         position: fixed;
         bottom: 8px;
         right: 8px;
-        font-size: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
         line-height: 1.2;
         color: #333;
         background-color: rgba(255, 255, 255, 0.55);
-        padding: 2px 6px;
+        padding: 4px 6px;
         border-radius: 3px;
         border: 1px solid rgba(0, 0, 0, 0.12);
         z-index: 1100;
-        pointer-events: none;
+        pointer-events: auto;
     }
+
+    .algorithm-switcher select {
+        font-size: 11px;
+        border: 1px solid rgba(0, 0, 0, 0.25);
+        border-radius: 3px;
+        background-color: rgba(255, 255, 255, 0.95);
+        padding: 2px 4px;
+    }
+
+    .algorithm-current {
+        font-size: 10px;
+        color: #555;
+        white-space: nowrap;
+    }
+
 </style>
