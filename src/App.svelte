@@ -45,6 +45,8 @@
     let updateFlag = false;
     let isInfoModalOpen = false;
     let isDemoMode = false;
+    /** デモ時に API リクエストへ渡す固定時刻（null は通常モード） */
+    let demoFrozenNow = null;
     let sunriseTime = null;
     let sunsetTime = null;
     let serverBusy = false;
@@ -66,13 +68,22 @@
 
     function checkDemoMode() {
         const url = new URL(window.location.href);
-        isDemoMode = url.searchParams.has('demo') || url.pathname.endsWith('/demo');
+        const path = url.pathname;
+        if (path.endsWith('/demo2') || url.searchParams.has('demo2')) {
+            demoFrozenNow = new Date('2026-04-29T09:00:00+09:00');
+            isDemoMode = true;
+        } else if (path.endsWith('/demo') || url.searchParams.has('demo')) {
+            demoFrozenNow = new Date('2015-07-27T06:00:00+09:00');
+            isDemoMode = true;
+        } else {
+            demoFrozenNow = null;
+            isDemoMode = false;
+        }
     }
 
     function updateNow() {
-        if (isDemoMode) {
-            now = new Date("2015-07-27 06:00+09:00");
-            // now = new Date("2025-07-23 12:00+09:00");
+        if (demoFrozenNow) {
+            now = new Date(demoFrozenNow.getTime());
         } else {
             now = new Date();
             now.setMinutes(0);
