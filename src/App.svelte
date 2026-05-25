@@ -14,7 +14,7 @@
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
     import annotationPlugin from 'chartjs-plugin-annotation';
-    import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor } from './utils.js';
+    import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor, buildObsByClockHour } from './utils.js';
     import InfoModal from './components/InfoModal.svelte';
     import SunCalc from 'suncalc';
 
@@ -37,7 +37,7 @@
     let ox_obs_array;
     let p_array;
     let p_max = 0;
-    let now = new Date("2015-07-27 06:00+09:00"); // undefinedは困る
+    let now = new Date("2015-07-27 23:00+09:00"); // undefinedは困る
     let pgt120_dict;
     let myChart;
     let center = [35.331586, 139.349782];
@@ -73,7 +73,7 @@
             demoFrozenNow = new Date('2026-04-29T09:00:00+09:00');
             isDemoMode = true;
         } else if (path.endsWith('/demo') || url.searchParams.has('demo')) {
-            demoFrozenNow = new Date('2015-07-27T06:00:00+09:00');
+            demoFrozenNow = new Date('2015-07-27T23:00:00+09:00');
             isDemoMode = true;
         } else {
             demoFrozenNow = null;
@@ -146,10 +146,17 @@
         const safeOxArray = ox_array.map(v => isNaN(v) ? null : v);
         const safeOxObsArray = ox_obs_array.map(v => isNaN(v) ? null : v);
         const safePArray = p_array.map(v => isNaN(v) ? null : v);
+        let obsByClockHour = null;
+        if (demoFrozenNow && ox_obs?.data && addr_dict?.X !== undefined) {
+            const obsRow = findMatchingRowIndex(ox_obs.data.XY, addr_dict.X, addr_dict.Y);
+            if (obsRow >= 0) {
+                obsByClockHour = buildObsByClockHour(ox_obs.data, obsRow, now, observeSourceTime);
+            }
+        }
         console.log(safeOxObsArray)
         const ctx = document.getElementById('myChart')?.getContext('2d');
         if (ctx) {
-            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts));
+            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts, obsByClockHour));
         }
     }
 
@@ -553,7 +560,14 @@
     {/if}
     <div class="algorithm-switcher">
         <label for="algorithm-select">予測アルゴリズム</label>
-        <select id="algorithm-select" bind:value={selectedAlgorithm} on:change={handleAlgorithmChange}>
+        <select
+            id="algorithm-select"
+            bind:value={selectedAlgorithm}
+            on:mousedown|stopPropagation
+            on:touchstart|stopPropagation
+            on:click|stopPropagation
+            on:change={handleAlgorithmChange}
+        >
             {#each algorithmOptions as option}
                 <option value={option.value}>{option.label}</option>
             {/each}

@@ -1,6 +1,6 @@
 import annotationPlugin from 'chartjs-plugin-annotation';
 
-export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts = []) => {
+export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts = [], obsByClockHour = null) => {
 // export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
     const y120 = Array(24).fill(120);
     const gradientColors = p_array.map(prob => getGradientColor(prob / 100));
@@ -13,13 +13,18 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
     const filteredOxArray = ox_array.slice(0, remainingHours);
     const filteredGradientColors = gradientColors.slice(0, remainingHours);
     // const filteredY120 = y120.slice(0, remainingHours);
-    const filteredOxObsArray = ox_obs_array.slice(23-currentHour, 24);
-    console.log(filteredOxObsArray)   
     // 0時から現在時刻までのデータをnullで埋める
     const paddedOxArray = Array(currentHour+1).fill(null).concat(filteredOxArray);
     const paddedGradientColors = Array(currentHour+1).fill('rgba(255, 255, 255, 0)').concat(filteredGradientColors);
     const paddedY120 = Array(24+1).fill(120); // 注意報レベルは常に120で24時間分
-    const paddedOxObsArray = filteredOxObsArray.concat(Array(24-filteredOxObsArray.length).fill(null));
+    /** デモ時: 指定時刻以降の実測も当日 0〜24 時に沿って表示（予測との比較用） */
+    const paddedOxObsArray =
+        obsByClockHour && obsByClockHour.length === 25
+            ? obsByClockHour.map((v) => (v === undefined || (typeof v === 'number' && isNaN(v)) ? null : v))
+            : (() => {
+                  const filteredOxObsArray = ox_obs_array.slice(23 - currentHour, 24);
+                  return filteredOxObsArray.concat(Array(24 - filteredOxObsArray.length).fill(null));
+              })();
 
     const pastPredictDatasets = (pastForecasts || []).map(({ anchorHour, padded }) => ({
         label: `OX予測(${anchorHour}時起点)`,

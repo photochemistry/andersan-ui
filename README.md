@@ -91,6 +91,55 @@ npm run build
 npm run preview
 ```
 
+## HTTPS/SSL証明書の設定
+
+このアプリケーションは位置情報を使用するため、HTTPSが必須です。Let's Encryptを使用してSSL証明書を設定できます。
+
+### 初回セットアップ
+
+1. **certbotのインストール**（未インストールの場合）:
+```bash
+sudo apt-get update
+sudo apt-get install -y certbot
+```
+
+2. **SSL証明書の取得**:
+```bash
+./scripts/setup-ssl.sh
+```
+
+このスクリプトは以下を実行します：
+- Let's Encryptで証明書を取得
+- 証明書を `~/certs/` に配置
+- 適切な権限を設定
+
+**注意**: 証明書取得時は、ポート80が一時的に使用されます。Viteサーバーが動いている場合は先に停止してください。
+
+3. **自動更新の設定**:
+```bash
+./scripts/setup-cron.sh
+```
+
+このスクリプトは、証明書の自動更新を毎日午前3時に実行するcronジョブを設定します。
+
+### 証明書の手動更新
+
+証明書を手動で更新する場合：
+```bash
+./scripts/renew-ssl.sh
+```
+
+### 証明書の確認
+
+証明書の有効期限を確認：
+```bash
+sudo certbot certificates
+```
+
+証明書の場所：
+- `~/certs/fullchain.pem` - 証明書チェーン
+- `~/certs/privkey.pem` - 秘密鍵
+
 ## デプロイ
 
 ### Vercelへのデプロイ

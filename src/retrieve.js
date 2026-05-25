@@ -4,6 +4,8 @@ const API_URL="/api"
 /** 利用可能な予測アルゴリズム */
 export const PREDICT_ALGORITHMS = {
     a1: 'andersan1 (a1)',
+    a1p: 'andersan1_16 (a1p)',
+    a1q: 'andersan1_17 (a1q)',
     a4_1: 'andersan4_1 (a4_1)'
 };
 
