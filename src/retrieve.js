@@ -6,11 +6,24 @@ export const PREDICT_ALGORITHMS = {
     a1: 'andersan1 (a1)',
     a1p: 'andersan1_16 (a1p)',
     a1q: 'andersan1_17 (a1q)',
+    a3_16: 'andersan3_16 (a3_16)',
     a4_1: 'andersan4_1 (a4_1)'
 };
 
+/** oxq API（分位点回帰）を使うモデル ID */
+const QUANTILE_PREDICT_ALGORITHMS = new Set(['a3_16', 'a4_1']);
+
+export function isQuantilePredictAlgorithm(algorithm) {
+    return QUANTILE_PREDICT_ALGORITHMS.has(algorithm);
+}
+
+/** 中央値(q50)より上側の分位幅のみ表示するモデル（q50, q90, q95） */
+export function isPositiveSideQuantileBand(algorithm) {
+    return algorithm === 'a3_16';
+}
+
 /** 現在選択中の予測アルゴリズム ID */
-let currentPredictAlgorithm = 'a1';
+let currentPredictAlgorithm = 'a3_16';
 
 export function getPredictAlgorithm() {
     return currentPredictAlgorithm;
@@ -50,6 +63,25 @@ export function dateToISOString(date) {
     return jstDate.toISOString().replace('.000Z', '+09:00'); // ミリ秒部分を削除
 }
 
+function formatJstIsoNoMs(date) {
+    const jst = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
+    const year = jst.getFullYear();
+    const month = String(jst.getMonth() + 1).padStart(2, '0');
+    const day = String(jst.getDate()).padStart(2, '0');
+    const hour = String(jst.getHours()).padStart(2, '0');
+    const minute = String(jst.getMinutes()).padStart(2, '0');
+    const second = String(jst.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hour}:${minute}:${second}+09:00`;
+}
+
+function getLocalDayRangeUtc(now) {
+    const start = new Date(now.getTime());
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now.getTime());
+    end.setHours(23, 0, 0, 0);
+    return { start, end };
+}
+
 export function unixTimeToJSTString(unixTime) {
     // Unixタイムをミリ秒に変換
     const milliseconds = unixTime * 1000;
@@ -69,9 +101,9 @@ function getOneHourAgo(date) {
 export async function fetchPredict(now) {
     try {
         let isostring = dateToISOString(now);
-        const isQuantileModel = currentPredictAlgorithm === 'a4_1';
+        const isQuantileModel = isQuantilePredictAlgorithm(currentPredictAlgorithm);
         let url = isQuantileModel
-            ? `${API_URL}/oxq/a4_1/kanagawa/${isostring}`
+            ? `${API_URL}/oxq/${currentPredictAlgorithm}/kanagawa/${isostring}`
             : `${API_URL}/ox/${currentPredictAlgorithm}/kanagawa/${isostring}`;
         const response = await fetch(url);
         if (response.status === 503) {
@@ -88,24 +120,53 @@ export async function fetchPredict(now) {
     }
 }
 
-export async function fetchObserve(now) {
+export async function fetchObserve(now, bbox, method = 'idw') {
     try {
-        let isostring = dateToISOString(now);
-        let url = `${API_URL}/obs/OX/kanagawa/${isostring}`;
+        const { start, end } = getLocalDayRangeUtc(now);
+        const params = new URLSearchParams({
+            z: '12',
+            items: 'ox',
+            from: formatJstIsoNoMs(start),
+            to: formatJstIsoNoMs(end),
+            bbox,
+            method
+        });
+        const url = `${API_URL}/v1/grid/field/range?${params.toString()}`;
         const response = await fetch(url);
-        if (response.status === 503) {
-            throw new Error('503');
+        if (response.status === 503) throw new Error('503');
+        if (response.ok) {
+            const raw = await response.json();
+            const cleanData = JSON.parse(JSON.stringify(raw).replace(/"None"/g, 'null'));
+            const root = cleanData?.data ?? cleanData;
+            const grid = root?.grid ?? {};
+            const values = root?.values ?? {};
+            const timestamps = root?.timestamps ?? [];
+            const ox = values?.ox ?? values?.OX ?? [];
+            return {
+                ...cleanData,
+                grid,
+                timestamps,
+                values: {
+                    ox
+                }
+            };
         }
-        if (!response.ok) {
+        if (response.status !== 404) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
-        const data = await response.json();
-        //consoleに、data.XYのはじめの5つを出力
-        console.log(data.data.XY.slice(0, 5));
 
-        // None値をnullに変換して処理
-        const cleanData = JSON.parse(JSON.stringify(data).replace(/"None"/g, 'null'));
-        return cleanData;
+        // range API が未デプロイの環境では旧 API を使う
+        const isostring = dateToISOString(now);
+        const legacyUrl = `${API_URL}/obs/OX/kanagawa/${isostring}`;
+        const legacyRes = await fetch(legacyUrl);
+        if (legacyRes.status === 503) throw new Error('503');
+        if (!legacyRes.ok) throw new Error(`HTTP error! status: ${legacyRes.status}`);
+        const legacyRaw = await legacyRes.json();
+        const legacy = JSON.parse(JSON.stringify(legacyRaw).replace(/"None"/g, 'null'));
+        return {
+            ...legacy,
+            legacy: true
+        };
     } catch (error) {
         throw error;
     }
@@ -113,11 +174,8 @@ export async function fetchObserve(now) {
 
 export async function fetchAddress(lon, lat) {
     try {
-        // lon, latは小数点3桁で丸める。
-        const roundedLon = Math.round(lon * 1000) / 1000;
-        const roundedLat = Math.round(lat * 1000) / 1000;
-
-        const url = `${API_URL}/loc/${roundedLon}/${roundedLat}`;
+        // 格子判定の境界と表示を一致させるため、丸めずにそのまま渡す。
+        const url = `${API_URL}/loc/${lon}/${lat}`;
         const response = await fetch(url);
         if (response.status === 503) {
             throw new Error('503');
@@ -135,9 +193,9 @@ export async function fetchAddress(lon, lat) {
 export async function fetchPgt120(now){
     try {
         const isostring = dateToISOString(now);
-        const isQuantileModel = currentPredictAlgorithm === 'a4_1';
+        const isQuantileModel = isQuantilePredictAlgorithm(currentPredictAlgorithm);
         const url = isQuantileModel
-            ? `${API_URL}/oxq/a4_1/pgt120/kanagawa/${isostring}`
+            ? `${API_URL}/oxq/${currentPredictAlgorithm}/pgt120/kanagawa/${isostring}`
             : `${API_URL}/ox/${currentPredictAlgorithm}/pgt120/kanagawa/${isostring}`;
         const response = await fetch(url);
         if (response.status === 503) {

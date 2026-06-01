@@ -9,12 +9,14 @@
         fetchObserve,
         PREDICT_ALGORITHMS,
         getPredictAlgorithm,
-        setPredictAlgorithm
+        setPredictAlgorithm,
+        isQuantilePredictAlgorithm,
+        isPositiveSideQuantileBand
     } from './retrieve.js';
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
     import annotationPlugin from 'chartjs-plugin-annotation';
-    import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor, buildObsByClockHour } from './utils.js';
+    import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor } from './utils.js';
     import InfoModal from './components/InfoModal.svelte';
     import SunCalc from 'suncalc';
 
@@ -34,16 +36,25 @@
     let address = "";
     let addr_dict = {};
     let ox_array;
+    /** @type {number[]|undefined} */
+    let ox_q10_array;
+    /** @type {number[]|undefined} */
+    let ox_q90_array;
+    /** @type {number[]|undefined} */
+    let ox_q95_array;
     let ox_obs_array;
     let p_array;
     let p_max = 0;
-    let now = new Date("2015-07-27 23:00+09:00"); // undefinedは困る
+    let now = new Date("2015-07-27 06:00+09:00"); // undefinedは困る
     let pgt120_dict;
     let myChart;
     let center = [35.331586, 139.349782];
     let debounceTimer;
-    let updateFlag = false;
+    /** 地図移動などで新しい取得が始まったらインクリメントし、古い結果を無視する */
+    let centerFetchId = 0;
     let isInfoModalOpen = false;
+    let isLoadingData = false;
+    let loadingStatusText = '';
     let isDemoMode = false;
     /** デモ時に API リクエストへ渡す固定時刻（null は通常モード） */
     let demoFrozenNow = null;
@@ -73,7 +84,7 @@
             demoFrozenNow = new Date('2026-04-29T09:00:00+09:00');
             isDemoMode = true;
         } else if (path.endsWith('/demo') || url.searchParams.has('demo')) {
-            demoFrozenNow = new Date('2015-07-27T23:00:00+09:00');
+            demoFrozenNow = new Date('2015-07-27T06:00:00+09:00');
             isDemoMode = true;
         } else {
             demoFrozenNow = null;
@@ -135,102 +146,350 @@
         return out;
     }
 
-    function drawChart(ox_array, ox_obs_array, p_array, now, pastForecasts) {
+    function drawChart(ox_array, ox_obs_array, p_array, now, pastForecasts, ox_q10_array, ox_q90_array, ox_q95_array, positiveQuantileBand) {
             if (myChart) {
             myChart.destroy();
             myChart = null;
         }
-        if (ox_array === undefined || ox_obs_array === undefined || p_array === undefined) return;
-        // if (ox_array === undefined || p_array === undefined) return;
+        if (ox_obs_array === undefined) return;
 
-        const safeOxArray = ox_array.map(v => isNaN(v) ? null : v);
+        const safeOxArray = (ox_array ?? Array(24).fill(null)).map(v => isNaN(v) ? null : v);
         const safeOxObsArray = ox_obs_array.map(v => isNaN(v) ? null : v);
         const safePArray = p_array.map(v => isNaN(v) ? null : v);
+        const safeOxQ10Array = ox_q10_array?.map(v => isNaN(v) ? null : v);
+        const safeOxQ90Array = ox_q90_array?.map(v => isNaN(v) ? null : v);
+        const safeOxQ95Array = ox_q95_array?.map(v => isNaN(v) ? null : v);
         let obsByClockHour = null;
-        if (demoFrozenNow && ox_obs?.data && addr_dict?.X !== undefined) {
-            const obsRow = findMatchingRowIndex(ox_obs.data.XY, addr_dict.X, addr_dict.Y);
-            if (obsRow >= 0) {
-                obsByClockHour = buildObsByClockHour(ox_obs.data, obsRow, now, observeSourceTime);
-            }
+        if (demoFrozenNow && addr_dict?.X !== undefined && addr_dict?.Y !== undefined) {
+            obsByClockHour = buildObsByClockHourFromGrid(addr_dict.X, addr_dict.Y, now, observeSourceTime ?? now);
         }
         console.log(safeOxObsArray)
         const ctx = document.getElementById('myChart')?.getContext('2d');
         if (ctx) {
-            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts, obsByClockHour));
+            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts, obsByClockHour, safeOxQ10Array, safeOxQ90Array, safeOxQ95Array, positiveQuantileBand));
+        }
+    }
+
+    function addHours(base, hours) {
+        const next = new Date(base.getTime());
+        next.setHours(next.getHours() + hours);
+        return next;
+    }
+
+    function withTimeout(promise, timeoutMs, errorMessage = 'timeout') {
+        let timeoutId;
+        const timeoutPromise = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
+        });
+        return Promise.race([promise, timeoutPromise]).finally(() => {
+            clearTimeout(timeoutId);
+        });
+    }
+
+    function getObserveGridIndexRange() {
+        const grid = ox_obs?.grid;
+        if (!grid) return null;
+        const minX = Number.isFinite(grid.xMin) ? grid.xMin : grid.minX;
+        const maxX = Number.isFinite(grid.xMax) ? grid.xMax : grid.maxX;
+        const minY = Number.isFinite(grid.yMin) ? grid.yMin : grid.minY;
+        const maxY = Number.isFinite(grid.yMax) ? grid.yMax : grid.maxY;
+        if (![minX, maxX, minY, maxY].every(Number.isFinite)) return null;
+        return { minX, maxX, minY, maxY };
+    }
+
+    function getObserveValueByGridAtDate(x, y, targetDate) {
+        if (ox_obs?.legacy && ox_obs?.data?.XY) {
+            const row = findMatchingRowIndex(ox_obs.data.XY, x, y);
+            if (row < 0) return null;
+            const anchor = new Date((observeSourceTime ?? now).getTime());
+            anchor.setMinutes(0, 0, 0);
+            const target = new Date(targetDate.getTime());
+            target.setMinutes(0, 0, 0);
+            const keyHour = Math.round((target.getTime() - anchor.getTime()) / 3600000);
+            const dataKey = keyHour > 0 ? `+${keyHour}` : `${keyHour}`;
+            const arr = ox_obs.data?.[dataKey];
+            if (!Array.isArray(arr) || row >= arr.length) return null;
+            const v = arr[row];
+            return v === null || v === undefined || isNaN(v) ? null : Math.max(0, Math.round(v));
+        }
+
+        const range = getObserveGridIndexRange();
+        const timestamps = ox_obs?.timestamps;
+        const cube = ox_obs?.values?.ox;
+        if (!range || !Array.isArray(timestamps) || !Array.isArray(cube)) return null;
+        if (x < range.minX || x > range.maxX || y < range.minY || y > range.maxY) return null;
+
+        const ix = x - range.minX;
+        const iy = y - range.minY;
+        const targetIso = targetDate.toISOString();
+        const t = timestamps.findIndex((ts) => new Date(ts).toISOString() === targetIso);
+        if (t < 0) return null;
+        const yz = cube[t];
+        if (!Array.isArray(yz) || !Array.isArray(yz[iy])) return null;
+        const v = yz[iy][ix];
+        return v === null || v === undefined || isNaN(v) ? null : Math.max(0, Math.round(v));
+    }
+
+    function buildObsByClockHourFromGrid(x, y, chartNow, obsAnchorTime) {
+        const anchor = new Date(obsAnchorTime.getTime());
+        anchor.setMinutes(0, 0, 0);
+        const base = new Date(chartNow.getTime());
+        base.setMinutes(0, 0, 0);
+        const arr = Array(25).fill(null);
+        for (let h = 0; h <= 24; h++) {
+            const slot = new Date(base.getFullYear(), base.getMonth(), base.getDate(), h, 0, 0, 0);
+            const v = getObserveValueByGridAtDate(x, y, slot);
+            arr[h] = v;
+        }
+        return arr;
+    }
+
+    function refreshChart() {
+        if (addr_dict?.X === undefined || addr_dict?.Y === undefined) return;
+        if (ox_obs === undefined) return;
+
+        const chartBaseTime = predictSourceTime ?? now;
+        const currentAlgorithm = getPredictAlgorithm();
+
+        ox_obs_array = Array.from({ length: 24 }, (_, i) => {
+            const targetDate = new Date(chartBaseTime.getTime());
+            targetDate.setMinutes(0, 0, 0);
+            targetDate.setHours(chartBaseTime.getHours() - 23 + i);
+            const value = getObserveValueByGridAtDate(addr_dict.X, addr_dict.Y, targetDate);
+            return value ?? 0;
+        });
+
+        if (ox_dict !== undefined) {
+            const row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
+            ox_array = Array.from({length: 24}, (_, i) =>
+                getPredictSeriesValue(ox_dict.data, i + 1, row, currentAlgorithm)
+            );
+            if (isQuantilePredictAlgorithm(currentAlgorithm)) {
+                ox_q90_array = Array.from({length: 24}, (_, i) =>
+                    getPredictSeriesValue(ox_dict.data, i + 1, row, currentAlgorithm, 'q90')
+                );
+                if (isPositiveSideQuantileBand(currentAlgorithm)) {
+                    ox_q10_array = undefined;
+                    ox_q95_array = Array.from({length: 24}, (_, i) =>
+                        getPredictSeriesValue(ox_dict.data, i + 1, row, currentAlgorithm, 'q95')
+                    );
+                } else {
+                    ox_q10_array = Array.from({length: 24}, (_, i) =>
+                        getPredictSeriesValue(ox_dict.data, i + 1, row, currentAlgorithm, 'q10')
+                    );
+                    ox_q95_array = undefined;
+                }
+            } else {
+                ox_q10_array = undefined;
+                ox_q90_array = undefined;
+                ox_q95_array = undefined;
+            }
+        }
+
+        if (pgt120_dict !== undefined && pgt120_dict !== null && ox_dict !== undefined) {
+            const pgtRow = findMatchingRowIndex(pgt120_dict.data.XY, addr_dict.X, addr_dict.Y);
+            p_array = Array.from({ length: 24 }, (_, i) => {
+                const prob = pgt120_dict?.data?.[`+${i + 1}_p_gt_120`]?.[pgtRow];
+                return prob === undefined || prob === null || isNaN(prob) ? NaN : Math.round(prob * 100);
+            });
+            const validProbabilities = p_array.filter(v => Number.isFinite(v));
+            p_max = validProbabilities.length ? Math.max(...validProbabilities) : 0;
+        } else {
+            p_array = Array.from({ length: 24 }, () => NaN);
+            p_max = 0;
+        }
+
+        /** @type {{ anchorHour: number, padded: (number|null)[] }[]} */
+        const pastForecasts = [];
+        const sortedPast = [...pastPredictDicts].sort((a, b) => a.anchorHour - b.anchorHour);
+        for (const { anchorHour, anchorDate, data } of sortedPast) {
+            if (!data || !sameLocalCalendarDay(anchorDate, now)) continue;
+            const row = findMatchingRowIndex(data.data.XY, addr_dict.X, addr_dict.Y);
+            if (row < 0) continue;
+            const ox = Array.from({ length: 24 }, (_, i) =>
+                getPredictSeriesValue(data.data, i + 1, row, currentAlgorithm)
+            );
+            const padded = Array(25).fill(null);
+            for (let t = anchorHour + 1; t <= 24; t++) {
+                const k = t - anchorHour;
+                if (k >= 1 && k <= 24) padded[t] = ox[k - 1];
+            }
+            pastForecasts.push({ anchorHour, padded });
+        }
+
+        drawChart(
+            ox_array ?? Array(24).fill(null),
+            ox_obs_array,
+            p_array,
+            chartBaseTime,
+            pastForecasts,
+            ox_q10_array,
+            ox_q90_array,
+            ox_q95_array,
+            isPositiveSideQuantileBand(currentAlgorithm)
+        );
+    }
+
+    async function loadCenterDataStaged(baseNow, fetchId) {
+        const isStale = () => fetchId !== centerFetchId;
+
+        let effectiveNow = new Date(baseNow.getTime());
+        now = new Date(effectiveNow.getTime());
+        pastPredictDicts = [];
+        ox_dict = undefined;
+        ox_obs = undefined;
+        ox_array = undefined;
+        ox_q10_array = undefined;
+        ox_q90_array = undefined;
+        ox_q95_array = undefined;
+        pgt120_dict = undefined;
+        predictSourceTime = null;
+        predictCachedAt = null;
+        observeSourceTime = null;
+        observeCachedAt = null;
+
+        loadingStatusText = '実測値を取得中...';
+        let obsRes;
+        try {
+            const viewBounds = map.getBounds();
+            const bbox = [
+                viewBounds.getWest(),
+                viewBounds.getSouth(),
+                viewBounds.getEast(),
+                viewBounds.getNorth()
+            ].join(',');
+            obsRes = await fetchObserve(effectiveNow, bbox, 'idw');
+        } catch (obsError) {
+            if (isStale()) return;
+            console.warn('Observe fetch failed; retrying 1 hour earlier.', obsError);
+            effectiveNow = addHours(baseNow, -1);
+            now = new Date(effectiveNow.getTime());
+            updateSunTimes();
+            loadingStatusText = '再取得中です...（時刻を1時間戻して試行）';
+            const viewBounds = map.getBounds();
+            const bbox = [
+                viewBounds.getWest(),
+                viewBounds.getSouth(),
+                viewBounds.getEast(),
+                viewBounds.getNorth()
+            ].join(',');
+            obsRes = await fetchObserve(effectiveNow, bbox, 'idw');
+        }
+        if (isStale()) return;
+        ox_obs = obsRes;
+        const obsTimes = extractTimeFields(obsRes);
+        observeSourceTime = obsTimes.sourceTime;
+        observeCachedAt = obsTimes.cachedAt;
+        refreshChart();
+
+        loadingStatusText = '予測値を取得中...';
+        const [predRes, pgtRes] = await Promise.all([
+            fetchPredict(effectiveNow),
+            fetchPgt120(effectiveNow).catch((error) => {
+                console.warn('pgt120 fetch failed', error);
+                return null;
+            })
+        ]);
+        if (isStale()) return;
+        ox_dict = predRes;
+        pgt120_dict = pgtRes;
+        const predTimes = extractTimeFields(predRes);
+        predictSourceTime = predTimes.sourceTime;
+        predictCachedAt = predTimes.cachedAt;
+        console.log('[debug][timing] fetch timestamps', {
+            requestedAt: baseNow.toISOString(),
+            effectiveNow: effectiveNow.toISOString(),
+            predictSourceTime: predictSourceTime?.toISOString() ?? null,
+            predictCachedAt: predictCachedAt?.toISOString() ?? null,
+            observeSourceTime: observeSourceTime?.toISOString() ?? null,
+            observeCachedAt: observeCachedAt?.toISOString() ?? null
+        });
+        updateSunTimes();
+        refreshChart();
+
+        const anchorDates = pastForecastAnchorDates(effectiveNow).slice().reverse();
+        for (let i = 0; i < anchorDates.length; i++) {
+            const anchorDate = anchorDates[i];
+            loadingStatusText = `過去予測を取得中... (${i + 1}/${anchorDates.length})`;
+            try {
+                const data = await fetchPredict(anchorDate);
+                if (isStale()) return;
+                pastPredictDicts = [
+                    ...pastPredictDicts,
+                    {
+                        anchorHour: anchorDate.getHours(),
+                        anchorDate: new Date(anchorDate.getTime()),
+                        data
+                    }
+                ];
+                refreshChart();
+            } catch (error) {
+                console.warn('Past predict fetch failed', anchorDate, error);
+            }
         }
     }
 
     async function updateCenter() {
         updateNow();
-        updateFlag = false;
+        centerFetchId++;
+        const fetchId = centerFetchId;
         const c = map.getCenter();
         center = [c.lat, c.lng];
         console.log("center updated")
         serverBusy = false;
-        
+        errorStatus = null;
+        isLoadingData = true;
+        loadingStatusText = 'データを取得中です...';
+
         // 地図移動時にも照星の位置を調整
         const bounds = map.getBounds();
         const latRange = bounds.getNorth() - bounds.getSouth();
         const offsetRatio = 0; // 位置確認のため0に設定
         const adjustedLat = center[0] - (offsetRatio * latRange);
-        
+
         // 調整された位置に地図を移動（ただし無限ループを避けるため条件付き）
         const currentCenter = map.getCenter();
         if (Math.abs(currentCenter.lat - adjustedLat) > 0.001) {
             map.setView([adjustedLat, center[1]], map.getZoom());
         }
-        
+
+        ox_dict = undefined;
+        ox_obs = undefined;
+        ox_array = undefined;
+        ox_obs_array = undefined;
+        ox_q10_array = undefined;
+        ox_q90_array = undefined;
+        ox_q95_array = undefined;
+        pgt120_dict = undefined;
+        pastPredictDicts = [];
+        predictSourceTime = null;
+        predictCachedAt = null;
+        observeSourceTime = null;
+        observeCachedAt = null;
+        if (myChart) {
+            myChart.destroy();
+            myChart = null;
+        }
+
         try {
-            pastPredictDicts = [];
-            const anchorDates = pastForecastAnchorDates(now);
-            const pastPromises = anchorDates.map((d) => fetchPredict(d));
-            const [predRes, obsRes, pgtRes, pastSettled] = await Promise.all([
-                fetchPredict(now),
-                fetchObserve(now),
-                fetchPgt120(now).catch((error) => {
-                    console.warn('pgt120 fetch failed', error);
-                    return null;
-                }),
-                Promise.allSettled(pastPromises)
-            ]);
-            ox_dict = predRes;
-            ox_obs = obsRes;
-            const predTimes = extractTimeFields(predRes);
-            const obsTimes = extractTimeFields(obsRes);
-            predictSourceTime = predTimes.sourceTime;
-            predictCachedAt = predTimes.cachedAt;
-            observeSourceTime = obsTimes.sourceTime;
-            observeCachedAt = obsTimes.cachedAt;
-            console.log('[debug][timing] fetch timestamps', {
-                requestedAt: now.toISOString(),
-                predictSourceTime: predictSourceTime?.toISOString() ?? null,
-                predictCachedAt: predictCachedAt?.toISOString() ?? null,
-                observeSourceTime: observeSourceTime?.toISOString() ?? null,
-                observeCachedAt: observeCachedAt?.toISOString() ?? null,
-                predictSourceDiffersFromRequested:
-                    !!(predictSourceTime && predictSourceTime.getTime() !== now.getTime())
-            });
-            pgt120_dict = pgtRes;
-            pastPredictDicts = anchorDates.map((d, i) => ({
-                anchorHour: d.getHours(),
-                anchorDate: new Date(d.getTime()),
-                data: pastSettled[i].status === 'fulfilled' ? pastSettled[i].value : null
-            })).filter((x) => x.data != null);
-            updateFlag = true;
-            updateSunTimes();
+            const firstNow = new Date(now.getTime());
+            await withTimeout(loadCenterDataStaged(firstNow, fetchId), 120000, 'timeout');
         } catch (error) {
-            if (error.message === '503' || error.message.includes('500')) {
-                serverBusy = true;
-                // エラー番号を抽出
-                const match = error.message.match(/\d+/);
-                errorStatus = match ? match[0] : null;
-            }
+            if (fetchId !== centerFetchId) return;
+            serverBusy = true;
+            const match = error.message.match(/\d+/);
+            errorStatus = match ? match[0] : null;
             console.error(error);
             predictSourceTime = null;
             predictCachedAt = null;
             observeSourceTime = null;
             observeCachedAt = null;
             pastPredictDicts = [];
+        } finally {
+            if (fetchId === centerFetchId) {
+                isLoadingData = false;
+                loadingStatusText = '';
+            }
         }
     }
 
@@ -247,6 +506,9 @@
         try {
             const a = await fetchAddress(longitude, latitude);
             addr_dict = a;
+            if (ox_obs !== undefined) {
+                refreshChart();
+            }
             const addressParts = a.address.split(',');
             if (addressParts.length >= 4) {
                 const prefecture = addressParts[addressParts.length - 3].trim();
@@ -289,7 +551,7 @@
             attribution: '© <a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院</a>'
         }).addTo(map);
 
-        // 地理院タイルの境界線を描画
+        // 予測格子点の最近傍領域境界を描画
         drawTileBoundaries();
 
         map.on('moveend', updateAddress);
@@ -305,34 +567,31 @@
             map.removeLayer(tileBoundaryLayer);
         }
 
-        const fixedZoom = 12; // 固定のズームレベル
+        const fixedZoom = 12; // 予測格子の固定ズームレベル
         const bounds = map.getBounds();
         
         tileBoundaryLayer = L.layerGroup();
         
-        // 地図の表示範囲内のタイル座標を計算（Z=12固定）
+        // 表示範囲にあるタイル番号を取得
         const tileBounds = getTileBounds(bounds, fixedZoom);
-        
 
-        
-        // 境界線を描画
-        for (let x = tileBounds.minX; x <= tileBounds.maxX; x++) {
-            for (let y = tileBounds.minY; y <= tileBounds.maxY; y++) {
-                const tileLatLngBounds = getTileLatLngBounds(x, y, fixedZoom);
-                
-                // 赤いタイル境界線を描画
-                const redTile = L.polygon([
-                    [tileLatLngBounds.south, tileLatLngBounds.west],
-                    [tileLatLngBounds.south, tileLatLngBounds.east],
-                    [tileLatLngBounds.north, tileLatLngBounds.east],
-                    [tileLatLngBounds.north, tileLatLngBounds.west]
+        // 格子点最近傍領域の境界は、通常タイル境界から半タイルずれた位置
+        // に並ぶので、各タイルを x/y とも 0.5 だけ平行移動した輪郭を描く。
+        for (let x = tileBounds.minX - 1; x <= tileBounds.maxX + 1; x++) {
+            for (let y = tileBounds.minY - 1; y <= tileBounds.maxY + 1; y++) {
+                const shiftedBounds = getShiftedTileLatLngBounds(x, y, fixedZoom);
+                const shiftedCell = L.polygon([
+                    [shiftedBounds.south, shiftedBounds.west],
+                    [shiftedBounds.south, shiftedBounds.east],
+                    [shiftedBounds.north, shiftedBounds.east],
+                    [shiftedBounds.north, shiftedBounds.west]
                 ], {
                     color: 'gray',
                     weight: 1,
                     opacity: 0.2,
                     fillOpacity: 0
                 });
-                tileBoundaryLayer.addLayer(redTile);
+                tileBoundaryLayer.addLayer(shiftedCell);
             }
         }
         
@@ -361,14 +620,32 @@
     }
 
     function getTileLatLngBounds(x, y, zoom) {
-        // 地理院タイルの座標系に合わせた変換
+        const westNorth = tileXYToLatLng(x, y, zoom);
+        const eastSouth = tileXYToLatLng(x + 1, y + 1, zoom);
+        return {
+            north: westNorth.lat,
+            south: eastSouth.lat,
+            east: eastSouth.lng,
+            west: westNorth.lng
+        };
+    }
+
+    function getShiftedTileLatLngBounds(x, y, zoom) {
+        const westNorth = tileXYToLatLng(x - 0.5, y - 0.5, zoom);
+        const eastSouth = tileXYToLatLng(x + 0.5, y + 0.5, zoom);
+        return {
+            north: westNorth.lat,
+            south: eastSouth.lat,
+            east: eastSouth.lng,
+            west: westNorth.lng
+        };
+    }
+
+    function tileXYToLatLng(x, y, zoom) {
         const n = Math.pow(2, zoom);
-        const west = (x / n) * 360 - 180;
-        const east = ((x + 1) / n) * 360 - 180;
-        const north = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
-        const south = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI;
-        
-        return { north, south, east, west };
+        const lng = (x / n) * 360 - 180;
+        const lat = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180 / Math.PI;
+        return { lat, lng };
     }
 
     const moveToCurrentLocation = () => {
@@ -405,10 +682,13 @@
         isInfoModalOpen = !isInfoModalOpen;
     }
 
-    function getPredictSeriesValue(data, horizon, row, algorithm) {
-        const primaryKey = algorithm === 'a4_1' ? `+${horizon}_q50` : `+${horizon}`;
+    function getPredictSeriesValue(data, horizon, row, algorithm, quantile = 'q50') {
+        const isQuantile = isQuantilePredictAlgorithm(algorithm);
+        const primaryKey = isQuantile ? `+${horizon}_${quantile}` : `+${horizon}`;
         const fallbackKey = `+${horizon}`;
-        const values = data?.[primaryKey] ?? data?.[fallbackKey];
+        const values = isQuantile && quantile !== 'q50'
+            ? data?.[primaryKey]
+            : (data?.[primaryKey] ?? data?.[fallbackKey]);
         if (!values || row < 0 || row >= values.length) return 0;
         const value = values[row];
         return value === null || isNaN(value) ? 0 : Math.max(0, Math.round(value));
@@ -418,79 +698,16 @@
         const nextAlgorithm = event.target.value;
         setPredictAlgorithm(nextAlgorithm);
         selectedAlgorithm = nextAlgorithm;
-        updateFlag = false;
         ox_array = undefined;
+        ox_q10_array = undefined;
+        ox_q90_array = undefined;
+        ox_q95_array = undefined;
         p_array = undefined;
         if (myChart) {
             myChart.destroy();
             myChart = null;
         }
         await updateCenter();
-    }
-
-    $: if (updateFlag) {
-        updateNow();
-        if (ox_dict !== undefined && addr_dict !== undefined) {
-            const currentAlgorithm = getPredictAlgorithm();
-            const row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
-            ox_array = Array.from({length: 24}, (_, i) =>
-                getPredictSeriesValue(ox_dict.data, i + 1, row, currentAlgorithm)
-            );
-        }
-        if (ox_obs !== undefined && addr_dict !== undefined) {
-            console.log(ox_obs.data.XY);
-            const row = findMatchingRowIndex(ox_obs.data.XY, addr_dict.X, addr_dict.Y);
-            ox_obs_array = Array.from({length: 24}, (_, i) => {
-                const dataKey = `${i - 23}`;
-                const dataArray = ox_obs.data[dataKey];
-                // console.log(dataArray)
-                // console.log(row, dataArray.length)
-                if (dataArray && row >= 0 && row < dataArray.length) {
-                    const value = dataArray[row];
-                    console.log(i-23, row, value)
-                    return value === null || isNaN(value) ? 0 : Math.max(0, Math.round(value));
-                }
-                return 0;
-            });
-        }
-        console.log(ox_obs.data)
-        console.log(ox_obs_array)
-        if (pgt120_dict !== undefined && pgt120_dict !== null && ox_array !== undefined && ox_obs_array !== undefined && addr_dict !== undefined) {
-            const pgtRow = findMatchingRowIndex(pgt120_dict.data.XY, addr_dict.X, addr_dict.Y);
-            p_array = Array.from({ length: 24 }, (_, i) => {
-                const prob = pgt120_dict?.data?.[`+${i + 1}_p_gt_120`]?.[pgtRow];
-                return prob === undefined || prob === null || isNaN(prob) ? NaN : Math.round(prob * 100);
-            });
-            const validProbabilities = p_array.filter(v => Number.isFinite(v));
-            p_max = validProbabilities.length ? Math.max(...validProbabilities) : 0;
-        } else {
-            p_array = Array.from({ length: 24 }, () => NaN);
-            p_max = 0;
-        }
-
-        /** @type {{ anchorHour: number, padded: (number|null)[] }[]} */
-        let pastForecasts = [];
-        if (addr_dict !== undefined && pastPredictDicts.length) {
-            for (const { anchorHour, anchorDate, data } of pastPredictDicts) {
-                if (!sameLocalCalendarDay(anchorDate, now)) continue;
-                const row = findMatchingRowIndex(data.data.XY, addr_dict.X, addr_dict.Y);
-                if (row < 0) continue;
-                const currentAlgorithm = getPredictAlgorithm();
-                const ox = Array.from({ length: 24 }, (_, i) =>
-                    getPredictSeriesValue(data.data, i + 1, row, currentAlgorithm)
-                );
-                const padded = Array(25).fill(null);
-                for (let t = anchorHour + 1; t <= 24; t++) {
-                    const k = t - anchorHour;
-                    if (k >= 1 && k <= 24) padded[t] = ox[k - 1];
-                }
-                pastForecasts.push({ anchorHour, padded });
-            }
-        }
-
-        const chartBaseTime = predictSourceTime ?? now;
-        drawChart(ox_array, ox_obs_array, p_array, chartBaseTime, pastForecasts);
-        // drawChart(ox_array, p_array, now);
     }
 
     onDestroy(() => {
@@ -548,6 +765,11 @@
     {#if isDemoMode}
         <div class="demo-banner">
             デモモード
+        </div>
+    {/if}
+    {#if isLoadingData}
+        <div class="loading-overlay">
+            {loadingStatusText}
         </div>
     {/if}
     {#if serverBusy}
@@ -839,6 +1061,20 @@
         color: black;
         margin-top: 5px;
         text-align: center;
+    }
+
+    .loading-overlay {
+        position: fixed;
+        top: 50px;
+        left: 50%;
+        transform: translateX(-50%);
+        background-color: rgba(0, 0, 0, 0.75);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        font-size: 14px;
+        z-index: 20000;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     }
 
     .server-busy-banner {

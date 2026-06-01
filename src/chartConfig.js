@@ -1,6 +1,6 @@
 import annotationPlugin from 'chartjs-plugin-annotation';
 
-export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts = [], obsByClockHour = null) => {
+export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts = [], obsByClockHour = null, ox_q10_array = null, ox_q90_array = null, ox_q95_array = null, positiveQuantileBand = false) => {
 // export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
     const y120 = Array(24).fill(120);
     const gradientColors = p_array.map(prob => getGradientColor(prob / 100));
@@ -17,6 +17,89 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
     const paddedOxArray = Array(currentHour+1).fill(null).concat(filteredOxArray);
     const paddedGradientColors = Array(currentHour+1).fill('rgba(255, 255, 255, 0)').concat(filteredGradientColors);
     const paddedY120 = Array(24+1).fill(120); // 注意報レベルは常に120で24時間分
+
+    const padFutureQuantileSeries = (series) => {
+        if (!series || series.length !== 24) return null;
+        const filtered = series.slice(0, remainingHours);
+        return Array(currentHour + 1).fill(null).concat(filtered);
+    };
+    const paddedOxQ90 = padFutureQuantileSeries(ox_q90_array);
+    const paddedOxQ10 = padFutureQuantileSeries(ox_q10_array);
+    const paddedOxQ95 = padFutureQuantileSeries(ox_q95_array);
+    const quantileBandBase = {
+        borderColor: 'transparent',
+        tension: 0.1,
+        borderWidth: 0,
+        pointRadius: 0,
+        xAxisID: 'x',
+        yAxisID: 'y',
+        spanGaps: false,
+        order: 5
+    };
+    let quantileBandDatasets = [];
+    if (positiveQuantileBand && paddedOxQ90) {
+        quantileBandDatasets = [
+            ...(paddedOxQ95
+                ? [
+                      {
+                          label: '予測95%分位(ppb)',
+                          data: paddedOxQ95,
+                          backgroundColor: 'transparent',
+                          fill: false,
+                          ...quantileBandBase
+                      },
+                      {
+                          label: '予測90-95%分位幅(ppb)',
+                          data: paddedOxQ90,
+                          backgroundColor: 'rgba(75, 192, 192, 0.15)',
+                          fill: '-1',
+                          ...quantileBandBase
+                      },
+                      {
+                          label: '予測50-90%分位幅(ppb)',
+                          data: paddedOxArray,
+                          backgroundColor: 'rgba(75, 192, 192, 0.28)',
+                          fill: '-1',
+                          ...quantileBandBase
+                      }
+                  ]
+                : [
+                      {
+                          label: '予測90%分位(ppb)',
+                          data: paddedOxQ90,
+                          backgroundColor: 'transparent',
+                          fill: false,
+                          ...quantileBandBase
+                      },
+                      {
+                          label: '予測50-90%分位幅(ppb)',
+                          data: paddedOxArray,
+                          backgroundColor: 'rgba(75, 192, 192, 0.28)',
+                          fill: '-1',
+                          ...quantileBandBase
+                      }
+                  ])
+        ];
+    } else if (paddedOxQ90 && paddedOxQ10) {
+        quantileBandDatasets = [
+            {
+                label: '予測90%分位(ppb)',
+                data: paddedOxQ90,
+                backgroundColor: 'transparent',
+                fill: false,
+                ...quantileBandBase
+            },
+            {
+                label: '予測10-90%分位幅(ppb)',
+                data: paddedOxQ10,
+                backgroundColor: 'rgba(75, 192, 192, 0.28)',
+                fill: '-1',
+                ...quantileBandBase
+            }
+        ];
+    }
+    const showQuantileBand = quantileBandDatasets.length > 0;
+
     /** デモ時: 指定時刻以降の実測も当日 0〜24 時に沿って表示（予測との比較用） */
     const paddedOxObsArray =
         obsByClockHour && obsByClockHour.length === 25
@@ -74,21 +157,24 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                     spanGaps: true,
                     order: 3
                 },
+                ...quantileBandDatasets,
                 {
                     label: 'OX予測(ppb)',
                     data: paddedOxArray,
                     borderColor: 'rgb(75, 192, 192)',
                     tension: 0.1,
-                    fill: {
-                        target: 'origin',
-                        above: ctx => {
-                            const { ctx: context, chartArea } = ctx.chart;
-                            const gradient = context.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
-                            paddedGradientColors.forEach((color, i) => gradient.addColorStop(i / (paddedGradientColors.length - 1), color));
-                            return gradient;
-                        },
-                    },
-                    backgroundColor: paddedGradientColors,
+                    fill: showQuantileBand
+                        ? false
+                        : {
+                              target: 'origin',
+                              above: ctx => {
+                                  const { ctx: context, chartArea } = ctx.chart;
+                                  const gradient = context.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+                                  paddedGradientColors.forEach((color, i) => gradient.addColorStop(i / (paddedGradientColors.length - 1), color));
+                                  return gradient;
+                              },
+                          },
+                    backgroundColor: showQuantileBand ? 'rgba(0, 0, 0, 0)' : paddedGradientColors,
                     yAxisID: 'y',
                     spanGaps: true,
                     order: 4
@@ -96,6 +182,7 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
             ],
         },
         options: {
+            animation: false,
             responsive: true,
             maintainAspectRatio: false,
             interaction: {
