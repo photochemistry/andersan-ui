@@ -113,7 +113,6 @@ export async function fetchPredict(now) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
-        console.log(data.data.XY.slice(0, 5));
         return data;
     } catch (error) {
         throw error;

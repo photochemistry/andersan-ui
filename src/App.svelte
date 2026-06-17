@@ -16,7 +16,8 @@
     import Chart from 'chart.js/auto';
     import { getChartConfig } from './chartConfig.js';
     import annotationPlugin from 'chartjs-plugin-annotation';
-    import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor } from './utils.js';
+    import { findMatchingRowIndex, formatTime, formatStartTime, getGradientColor, computeFutureExceedancePeriods, formatExceedancePeriods, getCurrentAlertLevel, ALERT_BAND_STYLES } from './utils.js';
+    import { buildGeneralAirMessage, DEFAULT_GENERAL_AIR_MESSAGE } from './messageScheme.js';
     import InfoModal from './components/InfoModal.svelte';
     import SunCalc from 'suncalc';
 
@@ -56,6 +57,12 @@
     let isLoadingData = false;
     let loadingStatusText = '';
     let isDemoMode = false;
+    /** 'general' | 'pro' — 一般利用者向け / 事業者向け */
+    let viewMode = 'general';
+    let alertPeriodsText = '該当なし';
+    let generalAirMessage = { ...DEFAULT_GENERAL_AIR_MESSAGE };
+    /** @type {'asthma'|'warning'|null} */
+    let infoBoxAlertLevel = null;
     /** デモ時に API リクエストへ渡す固定時刻（null は通常モード） */
     let demoFrozenNow = null;
     let sunriseTime = null;
@@ -77,14 +84,34 @@
     const MAP_HEIGHT_PERCENT = 100 - MAP_TOP_PERCENT; // 地図の高さ（%）
     const MAP_CENTER_PERCENT = MAP_TOP_PERCENT + (MAP_HEIGHT_PERCENT / 2); // 地図の中心位置（%）
 
+    function checkViewMode() {
+        const path = new URL(window.location.href).pathname;
+        viewMode = /\/pro(\/|$)/.test(path) ? 'pro' : 'general';
+    }
+
+    function getDemoDateForPreset(preset) {
+        switch (preset) {
+            case '1':
+                return new Date('2015-07-27T06:00:00+09:00');
+            case '2':
+                return new Date('2026-04-29T09:00:00+09:00');
+            case '3': {
+                const d = new Date();
+                d.setDate(d.getDate() - 1);
+                d.setHours(9, 0, 0, 0);
+                return d;
+            }
+            default:
+                return null;
+        }
+    }
+
     function checkDemoMode() {
         const url = new URL(window.location.href);
-        const path = url.pathname;
-        if (path.endsWith('/demo2') || url.searchParams.has('demo2')) {
-            demoFrozenNow = new Date('2026-04-29T09:00:00+09:00');
-            isDemoMode = true;
-        } else if (path.endsWith('/demo') || url.searchParams.has('demo')) {
-            demoFrozenNow = new Date('2015-07-27T06:00:00+09:00');
+        const demoParam = url.searchParams.get('demo');
+        const demoDate = demoParam ? getDemoDateForPreset(demoParam) : null;
+        if (demoDate) {
+            demoFrozenNow = demoDate;
             isDemoMode = true;
         } else {
             demoFrozenNow = null;
@@ -109,11 +136,6 @@
         return Number.isNaN(d.getTime()) ? null : d;
     }
 
-    function formatApiDateTime(date) {
-        if (!date) return '-';
-        return `${date.getMonth() + 1}/${date.getDate()} ${formatTime(date)}`;
-    }
-
     function extractTimeFields(payload) {
         const sourceRaw = payload?.source_time ?? payload?.meta?.source_time ?? null;
         const cachedRaw = payload?.cached_at ?? payload?.meta?.cached_at ?? null;
@@ -121,6 +143,15 @@
             sourceTime: parseApiTime(sourceRaw),
             cachedAt: parseApiTime(cachedRaw)
         };
+    }
+
+    function extractErrorStatus(error) {
+        if (!error) return null;
+        const message = error.message ?? String(error);
+        if (message === '503' || message === '500') return message;
+        const httpMatch = message.match(/status:\s*(\d{3})/i);
+        if (httpMatch) return httpMatch[1];
+        return null;
     }
 
     /** ローカル暦で a と b が同一日か */
@@ -155,7 +186,7 @@
 
         const safeOxArray = (ox_array ?? Array(24).fill(null)).map(v => isNaN(v) ? null : v);
         const safeOxObsArray = ox_obs_array.map(v => isNaN(v) ? null : v);
-        const safePArray = p_array.map(v => isNaN(v) ? null : v);
+        const safePArray = (p_array ?? Array(24).fill(NaN)).map(v => isNaN(v) ? null : v);
         const safeOxQ10Array = ox_q10_array?.map(v => isNaN(v) ? null : v);
         const safeOxQ90Array = ox_q90_array?.map(v => isNaN(v) ? null : v);
         const safeOxQ95Array = ox_q95_array?.map(v => isNaN(v) ? null : v);
@@ -166,7 +197,7 @@
         console.log(safeOxObsArray)
         const ctx = document.getElementById('myChart')?.getContext('2d');
         if (ctx) {
-            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts, obsByClockHour, safeOxQ10Array, safeOxQ90Array, safeOxQ95Array, positiveQuantileBand));
+            myChart = new Chart(ctx, getChartConfig(safeOxArray, safeOxObsArray, safePArray, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts, obsByClockHour, safeOxQ10Array, safeOxQ90Array, safeOxQ95Array, positiveQuantileBand, viewMode));
         }
     }
 
@@ -223,10 +254,10 @@
         const iy = y - range.minY;
         const targetIso = targetDate.toISOString();
         const t = timestamps.findIndex((ts) => new Date(ts).toISOString() === targetIso);
-        if (t < 0) return null;
+        if (t < 0 || t >= cube.length) return null;
         const yz = cube[t];
         if (!Array.isArray(yz) || !Array.isArray(yz[iy])) return null;
-        const v = yz[iy][ix];
+        const v = yz[iy]?.[ix];
         return v === null || v === undefined || isNaN(v) ? null : Math.max(0, Math.round(v));
     }
 
@@ -248,6 +279,7 @@
         if (addr_dict?.X === undefined || addr_dict?.Y === undefined) return;
         if (ox_obs === undefined) return;
 
+        try {
         const chartBaseTime = predictSourceTime ?? now;
         const currentAlgorithm = getPredictAlgorithm();
 
@@ -259,7 +291,7 @@
             return value ?? 0;
         });
 
-        if (ox_dict !== undefined) {
+        if (ox_dict !== undefined && ox_dict?.data?.XY) {
             const row = findMatchingRowIndex(ox_dict.data.XY, addr_dict.X, addr_dict.Y);
             ox_array = Array.from({length: 24}, (_, i) =>
                 getPredictSeriesValue(ox_dict.data, i + 1, row, currentAlgorithm)
@@ -284,9 +316,14 @@
                 ox_q90_array = undefined;
                 ox_q95_array = undefined;
             }
+        } else {
+            ox_array = undefined;
+            ox_q10_array = undefined;
+            ox_q90_array = undefined;
+            ox_q95_array = undefined;
         }
 
-        if (pgt120_dict !== undefined && pgt120_dict !== null && ox_dict !== undefined) {
+        if (pgt120_dict?.data?.XY && ox_dict?.data?.XY) {
             const pgtRow = findMatchingRowIndex(pgt120_dict.data.XY, addr_dict.X, addr_dict.Y);
             p_array = Array.from({ length: 24 }, (_, i) => {
                 const prob = pgt120_dict?.data?.[`+${i + 1}_p_gt_120`]?.[pgtRow];
@@ -299,11 +336,35 @@
             p_max = 0;
         }
 
+        const currentSlot = new Date(chartBaseTime.getTime());
+        currentSlot.setMinutes(0, 0, 0);
+        const currentPpb = getObserveValueByGridAtDate(addr_dict.X, addr_dict.Y, currentSlot);
+        infoBoxAlertLevel = getCurrentAlertLevel(currentPpb);
+
+        if (ox_array) {
+            const periods100 = computeFutureExceedancePeriods(ox_array, chartBaseTime, 100, false);
+            alertPeriodsText = formatExceedancePeriods(periods100, chartBaseTime);
+            generalAirMessage = buildGeneralAirMessage({
+                currentPpb,
+                oxArray: ox_array,
+                baseTime: chartBaseTime,
+                sunriseTime,
+            });
+        } else {
+            generalAirMessage = buildGeneralAirMessage({
+                currentPpb,
+                oxArray: undefined,
+                baseTime: chartBaseTime,
+                sunriseTime,
+            });
+            alertPeriodsText = '該当なし';
+        }
+
         /** @type {{ anchorHour: number, padded: (number|null)[] }[]} */
         const pastForecasts = [];
         const sortedPast = [...pastPredictDicts].sort((a, b) => a.anchorHour - b.anchorHour);
         for (const { anchorHour, anchorDate, data } of sortedPast) {
-            if (!data || !sameLocalCalendarDay(anchorDate, now)) continue;
+            if (!data?.data?.XY || !sameLocalCalendarDay(anchorDate, now)) continue;
             const row = findMatchingRowIndex(data.data.XY, addr_dict.X, addr_dict.Y);
             if (row < 0) continue;
             const ox = Array.from({ length: 24 }, (_, i) =>
@@ -328,6 +389,9 @@
             ox_q95_array,
             isPositiveSideQuantileBand(currentAlgorithm)
         );
+        } catch (error) {
+            console.error('refreshChart failed', error);
+        }
     }
 
     async function loadCenterDataStaged(baseNow, fetchId) {
@@ -477,8 +541,7 @@
         } catch (error) {
             if (fetchId !== centerFetchId) return;
             serverBusy = true;
-            const match = error.message.match(/\d+/);
-            errorStatus = match ? match[0] : null;
+            errorStatus = extractErrorStatus(error);
             console.error(error);
             predictSourceTime = null;
             predictCachedAt = null;
@@ -520,9 +583,7 @@
         } catch (error) {
             if (error.message === '503' || error.message.includes('500')) {
                 serverBusy = true;
-                // エラー番号を抽出
-                const match = error.message.match(/\d+/);
-                errorStatus = match ? match[0] : null;
+                errorStatus = extractErrorStatus(error);
             }
             console.error(error);
         }
@@ -537,6 +598,7 @@
         // Chart.jsにannotationプラグインを登録
         Chart.register(annotationPlugin);
         
+        checkViewMode();
         checkDemoMode();
         updateNow();
         // 地図の中心位置を上にずらして、照星が指す位置が正しいターゲット位置になるようにする
@@ -682,6 +744,12 @@
         isInfoModalOpen = !isInfoModalOpen;
     }
 
+    function getInfoBoxStyle(alertLevel) {
+        if (!alertLevel) return '';
+        const style = ALERT_BAND_STYLES[alertLevel];
+        return `background-color: ${style.backgroundColor}; border-color: ${style.borderColor}; border-width: 2px;`;
+    }
+
     function getPredictSeriesValue(data, horizon, row, algorithm, quantile = 'q50') {
         const isQuantile = isQuantilePredictAlgorithm(algorithm);
         const primaryKey = isQuantile ? `+${horizon}_${quantile}` : `+${horizon}`;
@@ -726,6 +794,7 @@
 <div class="map-viewport">
     <div id="map">
     <div class="info-box"
+        style={getInfoBoxStyle(infoBoxAlertLevel)}
         on:touchstart|stopPropagation
         on:touchmove|stopPropagation
         on:touchend|stopPropagation
@@ -735,12 +804,25 @@
     >
         <div class="address-overlay">{address}</div>
         <div class="start-time-overlay">{formatStartTime(now)}</div>
-        <div class="pmax-value">{p_max}%</div>
-        <div class="source-time-overlay">予測基準: {formatApiDateTime(predictSourceTime)}</div>
-        <div class="source-time-overlay">観測基準: {formatApiDateTime(observeSourceTime)}</div>
-        <div class="pmax-label">
-            (光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
-        </div>
+        {#if viewMode === 'pro'}
+            <div class="pmax-value">{p_max}%</div>
+            <div class="pmax-label">
+                (光化学オキシダント濃度が24時間以内に注意報発令レベルに達する確率)
+            </div>
+            <div class="exceedance-periods">
+                <div class="exceedance-periods-label">警戒濃度(100ppb)到達予想</div>
+                <div class="exceedance-periods-value">{alertPeriodsText}</div>
+            </div>
+        {:else}
+            <div class="air-status-face" aria-label={generalAirMessage.statusLabel}>
+                {generalAirMessage.statusIcon}
+            </div>
+            <span class="air-trend-label">{generalAirMessage.trendLabel}</span>
+            {#if generalAirMessage.ppbText}
+                <div class="air-ppb-hint">{generalAirMessage.ppbText}</div>
+            {/if}
+            <div class="air-message-body">{generalAirMessage.message}</div>
+        {/if}
         <!-- {#if sunriseTime && sunsetTime}
             <div class="sun-times">
                 <div>日の出: {formatTime(sunriseTime)}</div>
@@ -794,7 +876,6 @@
                 <option value={option.value}>{option.label}</option>
             {/each}
         </select>
-        <div class="algorithm-current">{PREDICT_ALGORITHMS[selectedAlgorithm]}</div>
     </div>
     </div>
     <div class="crosshair-container" aria-hidden="true">
@@ -969,10 +1050,48 @@
         color: black;
     }
 
-    .source-time-overlay {
+    .exceedance-periods {
+        margin-top: 4px;
+        margin-bottom: 4px;
+    }
+
+    .exceedance-periods-label {
         font-size: 9pt;
         color: #333;
-        line-height: 1.2;
+    }
+
+    .exceedance-periods-value {
+        font-size: 14pt;
+        font-weight: bold;
+        color: black;
+    }
+
+    .air-status-face {
+        font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+        font-size: calc(10pt * 2.5);
+        line-height: 1;
+        margin: 4px 0 6px;
+    }
+
+    .air-trend-label {
+        font-size: 10pt;
+        font-weight: bold;
+        color: #444;
+        white-space: nowrap;
+    }
+
+    .air-ppb-hint {
+        font-size: 8pt;
+        color: #999;
+        margin-bottom: 4px;
+    }
+
+    .air-message-body {
+        font-size: 10pt;
+        line-height: 1.45;
+        color: #222;
+        max-width: 320px;
+        text-align: center;
     }
 
     .info-button-container {
@@ -1116,12 +1235,6 @@
         border-radius: 3px;
         background-color: rgba(255, 255, 255, 0.95);
         padding: 2px 4px;
-    }
-
-    .algorithm-current {
-        font-size: 10px;
-        color: #555;
-        white-space: nowrap;
     }
 
 </style>

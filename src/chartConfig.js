@@ -1,9 +1,12 @@
 import annotationPlugin from 'chartjs-plugin-annotation';
+import { getPpbFaceEmoji } from './utils.js';
 
-export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts = [], obsByClockHour = null, ox_q10_array = null, ox_q90_array = null, ox_q95_array = null, positiveQuantileBand = false) => {
+export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime, pastForecasts = [], obsByClockHour = null, ox_q10_array = null, ox_q90_array = null, ox_q95_array = null, positiveQuantileBand = false, viewMode = 'general') => {
 // export const getChartConfig = (ox_array, p_array, now, formatTime, getGradientColor, sunriseTime, sunsetTime) => {
-    const y120 = Array(24).fill(120);
-    const gradientColors = p_array.map(prob => getGradientColor(prob / 100));
+    const safePArray = p_array ?? Array(24).fill(null);
+    const gradientColors = safePArray.map(prob =>
+        prob === null || prob === undefined || isNaN(prob) ? 'rgba(255, 255, 255, 0)' : getGradientColor(prob / 100)
+    );
 
     // 現在時刻から24時までの時間数を計算
     const currentHour = now.getHours();
@@ -12,11 +15,11 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
     // データを現在時刻以降のものだけに制限
     const filteredOxArray = ox_array.slice(0, remainingHours);
     const filteredGradientColors = gradientColors.slice(0, remainingHours);
-    // const filteredY120 = y120.slice(0, remainingHours);
     // 0時から現在時刻までのデータをnullで埋める
     const paddedOxArray = Array(currentHour+1).fill(null).concat(filteredOxArray);
     const paddedGradientColors = Array(currentHour+1).fill('rgba(255, 255, 255, 0)').concat(filteredGradientColors);
-    const paddedY120 = Array(24+1).fill(120); // 注意報レベルは常に120で24時間分
+    const paddedY120 = Array(24 + 1).fill(120);
+    const isPro = viewMode === 'pro';
 
     const padFutureQuantileSeries = (series) => {
         if (!series || series.length !== 24) return null;
@@ -130,19 +133,23 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
             labels: Array.from({length: 25}, (_, i) => i),
             datasets: [
                 ...pastPredictDatasets,
-                {
-                    type: 'line',
-                    label: '注意報レベル(120ppb)',
-                    data: paddedY120,
-                    borderColor: 'red',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    fill: false,
-                    xAxisID: 'x',
-                    yAxisID: 'y',
-                    spanGaps: true,
-                    order: 2
-                },
+                ...(isPro
+                    ? [
+                          {
+                              type: 'line',
+                              label: '注意報レベル(120ppb)',
+                              data: paddedY120,
+                              borderColor: 'red',
+                              borderWidth: 2,
+                              pointRadius: 0,
+                              fill: false,
+                              xAxisID: 'x',
+                              yAxisID: 'y',
+                              spanGaps: true,
+                              order: 2
+                          }
+                      ]
+                    : []),
                 {
                     // type: 'line',
                     label: 'Ox実測値(ppb)',
@@ -165,16 +172,19 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                     tension: 0.1,
                     fill: showQuantileBand
                         ? false
-                        : {
-                              target: 'origin',
-                              above: ctx => {
-                                  const { ctx: context, chartArea } = ctx.chart;
-                                  const gradient = context.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
-                                  paddedGradientColors.forEach((color, i) => gradient.addColorStop(i / (paddedGradientColors.length - 1), color));
-                                  return gradient;
-                              },
-                          },
-                    backgroundColor: showQuantileBand ? 'rgba(0, 0, 0, 0)' : paddedGradientColors,
+                        : isPro
+                          ? {
+                                target: 'origin',
+                                above: ctx => {
+                                    const { ctx: context, chartArea } = ctx.chart;
+                                    const gradient = context.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+                                    paddedGradientColors.forEach((color, i) => gradient.addColorStop(i / (paddedGradientColors.length - 1), color));
+                                    return gradient;
+                                },
+                            }
+                          : false,
+                    backgroundColor: showQuantileBand || !isPro ? 'rgba(0, 0, 0, 0)' : paddedGradientColors,
+                    pointRadius: 0,
                     yAxisID: 'y',
                     spanGaps: true,
                     order: 4
@@ -243,23 +253,54 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                 },
                 annotation: {
                     annotations: {
-                        // 赤線（注意報レベル）のラベル
-                        redLineLabel: {
-                            type: 'label',
-                            xValue: 0,
-                            yValue: 120,
-                            content: '注意報レベル(120ppb)',
-                            color: 'red',
-                            font: {
-                                size: 12,
-                                weight: 'bold'
-                            },
-                            position: 'start',
-                            backgroundColor: 'white',
-                            borderColor: 'red',
-                            borderWidth: 1,
-                            padding: 4
+                        ...(viewMode === 'general'
+                            ? {
+                                  asthmaAlertBand: {
+                                      type: 'box',
+                                      yMin: 60,
+                                      yMax: 100,
+                                      backgroundColor: 'rgba(255, 235, 59, 0.30)',
+                                      borderWidth: 0,
+                                      drawTime: 'beforeDatasetsDraw',
+                                  },
+                              }
+                            : {}),
+                        warningAlertBand: {
+                            type: 'box',
+                            yMin: 100,
+                            yMax: isPro ? 120 : 150,
+                            backgroundColor: 'rgba(255, 152, 0, 0.30)',
+                            borderWidth: 0,
+                            drawTime: 'beforeDatasetsDraw',
                         },
+                        ...(isPro
+                            ? {
+                                  advisoryAlertBand: {
+                                      type: 'box',
+                                      yMin: 120,
+                                      yMax: 150,
+                                      backgroundColor: 'rgba(244, 67, 54, 0.25)',
+                                      borderWidth: 0,
+                                      drawTime: 'beforeDatasetsDraw',
+                                  },
+                                  redLineLabel: {
+                                      type: 'label',
+                                      xValue: 0,
+                                      yValue: 120,
+                                      content: '注意報レベル(120ppb)',
+                                      color: 'red',
+                                      font: {
+                                          size: 12,
+                                          weight: 'bold'
+                                      },
+                                      position: 'start',
+                                      backgroundColor: 'white',
+                                      borderColor: 'red',
+                                      borderWidth: 1,
+                                      padding: 4
+                                  },
+                              }
+                            : {}),
                         // 青線（実測値）のラベル
                         blueLineLabel: {
                             type: 'label',
@@ -299,6 +340,7 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
             },
         },
         plugins: [{
+            id: 'nightShading',
             beforeDraw: (chart) => {
                 const ctx = chart.canvas.getContext('2d');
                 const { chartArea } = chart;
@@ -324,6 +366,28 @@ export const getChartConfig = (ox_array, ox_obs_array, p_array, now, formatTime,
                     ctx.fillRect(afterSunsetX, chartArea.top, afterSunsetWidth, chartArea.height);
                 }
                 
+                ctx.restore();
+            },
+        }, {
+            id: 'ppbFaceMarkers',
+            afterDatasetsDraw(chart) {
+                if (isPro) return;
+                const datasetIndex = chart.data.datasets.findIndex((d) => d.label === 'OX予測(ppb)');
+                if (datasetIndex < 0) return;
+                const meta = chart.getDatasetMeta(datasetIndex);
+                const ctx = chart.ctx;
+                const fontSize = Math.max(12, Math.min(18, chart.chartArea.width / 28));
+                ctx.save();
+                ctx.font = `${fontSize}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'bottom';
+                meta.data.forEach((point, index) => {
+                    const ppb = paddedOxArray[index];
+                    if (ppb === null || ppb === undefined || !Number.isFinite(ppb)) return;
+                    const { x, y } = point.getProps(['x', 'y'], true);
+                    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+                    ctx.fillText(getPpbFaceEmoji(ppb), x, y - 4);
+                });
                 ctx.restore();
             },
         }]
